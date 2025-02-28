@@ -1,5 +1,6 @@
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
+from tf_agents.trajectories import time_step as ts
 from RotationSystem import RotationSystem
 from Pieces import Piece, PieceType
 from Moves import Moves, Keys
@@ -15,16 +16,10 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         self._queue_size = queue_size
         
         self._board = np.zeros((24, 10), dtype=np.float32)
-        self._hold_piece = PieceType.N
-        self._can_hold = True
+        
         self._rotation_system = RotationSystem(board=self._board)
         
         self._valid_pieces = [piece for piece in PieceType if piece is not PieceType.N]
-        self._next_bag = self._random.sample(self._valid_pieces, len(self._valid_pieces))
-        self._active_piece = self._spawn_piece(self._next_bag.pop(0))
-        self._fill_queue(True)
-        
-        self._episode_ended = False
         
         self._observation_spec = {
             'board': array_spec.BoundedArraySpec(
@@ -47,7 +42,7 @@ class TetrisPyEnv(py_environment.PyEnvironment):
     
     def observation_spec(self):
         return self._observation_spec
-    
+        
     def _reset(self):
         # Empty all cells
         self._board[:] = 0
@@ -59,11 +54,28 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         self._fill_queue(True)
         
         self._episode_ended = False
+        
+        observation = self._create_observation()
+        
+        return ts.restart(observation)
+    
+    def _create_observation(self):
+        pieces = [self._active_piece.piece_type, self._hold_piece] + self._queue
+        pieces = np.array([piece.value for piece in pieces], dtype=np.int32)
+        
+        observation = {
+            'board': self._board,
+            'pieces': pieces
+        }
+        
+        return observation
     
     def _convert_to_keys(self, action: dict[str, int]):
-        key_sequence = Moves.to_keys[(action['hold'],
-                                      action['standard'],
-                                      action['spin'])]
+        hold = Moves._holds[action['hold']]
+        standard = Moves._standards[action['standard']]
+        spin = Moves._spins[action['spin']]
+        
+        key_sequence = hold + standard + spin + [Keys.hard_drop]
         
         return key_sequence
     
@@ -132,10 +144,11 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         
         self._clear_lines()
         
+        self._active_piece = self._spawn_piece(self._queue.pop(0))
+        
         if np.any(self._board[:4] != 0):
             return False
         else:
-            self._active_piece = self._spawn_piece(self._queue.pop(0))
             return True
     
     def _try_hold(self):
@@ -184,11 +197,14 @@ class TetrisPyEnv(py_environment.PyEnvironment):
             elif key == Keys.hold:
                 self._try_hold()
         
-        if self._lock_piece():
-            # Locked successfully, cycle queue and allow next hold
-            self._fill_queue()
-            self._can_hold = True
+        self._fill_queue()
+        self._can_hold = True
+        
+        self._episode_ended = not self._lock_piece()
+        
+        observation = self._create_observation()
+        
+        if self._episode_ended:
+            return ts.terminated(observation, reward=-1.0)
         else:
-            self._reset()
-            
-            
+            return ts.transition(observation, reward=0.0)
