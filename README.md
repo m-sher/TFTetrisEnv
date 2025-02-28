@@ -2,4 +2,8 @@
 TensorFlow environment for RL with Tetris SRS+
 
 ## Todo
-- Everything :)
+- Standard scoring
+- Supplemental scoring
+- Back-to-back
+- Comboing
+- Everything else :)
