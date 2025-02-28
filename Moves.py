@@ -33,11 +33,11 @@ class Moves:
         [Keys.hold]
     ]
     _standards = [
-        [],
         [Keys.DAS_left],
         [Keys.DAS_left, Keys.tap_right],
         [Keys.tap_left, Keys.tap_left],
         [Keys.tap_left],
+        [],
         [Keys.tap_right],
         [Keys.tap_right, Keys.tap_right],
         [Keys.DAS_right, Keys.tap_left],
@@ -75,19 +75,11 @@ class Moves:
     ]
     _spins = [
         [],
-        [Keys.clockwise],
-        [Keys.anticlockwise],
-        [Keys.rotate_180],
-        [Keys.clockwise, Keys.clockwise],
-        [Keys.anticlockwise, Keys.anticlockwise],
-        [Keys.clockwise, Keys.rotate_180],
-        [Keys.anticlockwise, Keys.rotate_180]
+        [Keys.soft_drop, Keys.clockwise],
+        [Keys.soft_drop, Keys.anticlockwise],
+        [Keys.soft_drop, Keys.rotate_180],
+        [Keys.soft_drop, Keys.clockwise, Keys.clockwise],
+        [Keys.soft_drop, Keys.anticlockwise, Keys.anticlockwise],
+        [Keys.soft_drop, Keys.clockwise, Keys.rotate_180],
+        [Keys.soft_drop, Keys.anticlockwise, Keys.rotate_180]
     ]
-    
-    to_keys = {}
-    for hold_index, hold in enumerate(_holds):
-        for std_index, standard in enumerate(_standards):
-            for spin_index, spin in enumerate(_spins):
-                key_sequence = hold + standard + (([Keys.soft_drop] + spin) if spin else []) + [Keys.hard_drop]
-                indices = (hold_index, std_index, spin_index)
-                to_keys[indices] = key_sequence
