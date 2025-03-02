@@ -2,8 +2,12 @@
 TensorFlow environment for RL with Tetris SRS+
 
 ## Todo
-- Standard scoring
+- Undo for debugging
 - Supplemental scoring
-- Back-to-back
-- Comboing
+- More spins
+	- Immobile detection for all-mini+
+- Combo table
 - Everything else :)
+
+### Done
+- ~~Standard scoring~~
