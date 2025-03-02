@@ -83,48 +83,42 @@ class RotationSystem():
             (2, 0): np.array([[+1, +0], [+1, -1], [+1, +1], [+0, -1], [+0, +1]], dtype=np.int32),  # 2 -> 0
             (3, 1): np.array([[+0, -1], [-2, -1], [-1, -1], [-2, +0], [-1, +0]], dtype=np.int32),  # L -> R
         }
-       
+    
     def overlaps(self, cells: np.ndarray, loc: np.ndarray) -> bool:
         cell_coords = cells + loc
         rows, cols = cell_coords.T
         
         # Outside board vertically
-        if any(rows < 0) or any(rows > self._board.shape[0] - 1):
+        if np.any(rows < 0) or np.any(rows > self._board.shape[0] - 1):
             return True
         # Outside board horizontally
-        if any(cols < 0) or any(cols > self._board.shape[1] - 1):
+        if np.any(cols < 0) or np.any(cols > self._board.shape[1] - 1):
             return True
         # Overlaps occupied cell
-        if any(self._board[rows, cols] != 0):
+        if np.any(self._board[rows, cols] != 0):
             return True
         
         return False
         
-    def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece, cells: np.ndarray, new_r: int):
+    def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece, cells: np.ndarray, new_r: int, delta_r: int):
         if (piece.r, new_r) not in kick_table.keys():
             # Rotation not possible, do nothing
+            piece.delta_r = 0
+            piece.delta_loc = np.zeros((2,), dtype=np.int32)
             return
         
-        for delta in kick_table[(piece.r, new_r)]:
+        for delta_loc in kick_table[(piece.r, new_r)]:
             # Check each kick and perform the first valid
-            if not self.overlaps(cells=cells, loc=piece.loc + delta):
+            if not self.overlaps(cells=cells, loc=piece.loc + delta_loc):
                 # Kick doesn't overlap, so apply it and break
-                piece.loc += delta
                 piece.r = new_r
-                break
+                piece.delta_r = delta_r    
             
-        piece.cells = cells
+                piece.loc += delta_loc
+                piece.delta_loc = delta_loc
+                
+                piece.cells = cells
+                return 
     
-    def rotate(self, piece: Piece, raw_r: int):
-        new_r = (piece.r + raw_r) % 4
-        cells = self.orientations[piece.piece_type][new_r]
-        
-        if not self.overlaps(cells=cells, loc=piece.loc):
-            # Applying rotation doesn't overlap, so apply it
-            piece.r = new_r
-            piece.cells = cells
-            return 
-        
-        # Applying rotation causes overlap, check for kicks
-        kick_table = self.i_kicks if piece.piece_type == PieceType.I else self.kicks
-        self.kick_piece(kick_table, piece, cells, new_r)
+        piece.delta_loc = np.zeros((2,), dtype=np.int32)
+        piece.delta_r = 0
