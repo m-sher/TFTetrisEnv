@@ -2,84 +2,84 @@ import numpy as np
 
 class Keys:
     START = 0
-    hold = 1
-    tap_left = 2
-    tap_right = 3
-    DAS_left = 4
-    DAS_right = 5
-    clockwise = 6
-    anticlockwise = 7
-    rotate_180 = 8
-    soft_drop = 9
-    hard_drop = 10
+    HOLD = 1
+    TAP_LEFT = 2
+    TAP_RIGHT = 3
+    DAS_LEFT = 4
+    DAS_RIGHT = 5
+    CLOCKWISE = 6
+    ANTICLOCKWISE = 7
+    ROTATE_180 = 8
+    SOFT_DROP = 9
+    HARD_DROP = 10
     PAD = 11
     
     key_vectors = {
         # vertical, horizontal, rotation
-        tap_left: np.array([+0, -1, +0], dtype=np.int32),
-        tap_right: np.array([+0, +1, +0], dtype=np.int32),
-        DAS_left: np.array([+0, -100, +0], dtype=np.int32),
-        DAS_right: np.array([+0, +100, +0], dtype=np.int32),
-        clockwise: np.array([+0, +0, +1], dtype=np.int32),
-        anticlockwise: np.array([+0, +0, -1], dtype=np.int32),
-        rotate_180: np.array([+0, +0, +2], dtype=np.int32),
-        soft_drop: np.array([+100, +0, +0], dtype=np.int32), # soft and hard drop
-        hard_drop: np.array([+100, +0, +0], dtype=np.int32), # are the same deltas
+        TAP_LEFT: np.array([+0, -1, +0], dtype=np.int32),
+        TAP_RIGHT: np.array([+0, +1, +0], dtype=np.int32),
+        DAS_LEFT: np.array([+0, -100, +0], dtype=np.int32),
+        DAS_RIGHT: np.array([+0, +100, +0], dtype=np.int32),
+        CLOCKWISE: np.array([+0, +0, +1], dtype=np.int32),
+        ANTICLOCKWISE: np.array([+0, +0, -1], dtype=np.int32),
+        ROTATE_180: np.array([+0, +0, +2], dtype=np.int32),
+        SOFT_DROP: np.array([+100, +0, +0], dtype=np.int32), # soft and hard drop
+        HARD_DROP: np.array([+100, +0, +0], dtype=np.int32), # are the same deltas
     }
     
 class Moves:
     _holds = [
         [],
-        [Keys.hold]
+        [Keys.HOLD]
     ]
     _standards = [
-        [Keys.DAS_left],
-        [Keys.DAS_left, Keys.tap_right],
-        [Keys.tap_left, Keys.tap_left],
-        [Keys.tap_left],
+        [Keys.DAS_LEFT],
+        [Keys.DAS_LEFT, Keys.TAP_RIGHT],
+        [Keys.TAP_LEFT, Keys.TAP_LEFT],
+        [Keys.TAP_LEFT],
         [],
-        [Keys.tap_right],
-        [Keys.tap_right, Keys.tap_right],
-        [Keys.DAS_right, Keys.tap_left],
-        [Keys.DAS_right],                                       # No rotations
+        [Keys.TAP_RIGHT],
+        [Keys.TAP_RIGHT, Keys.TAP_RIGHT],
+        [Keys.DAS_RIGHT, Keys.TAP_LEFT],
+        [Keys.DAS_RIGHT],                                       # No rotations
         
-        [Keys.DAS_left, Keys.clockwise],
-        [Keys.tap_left, Keys.tap_left, Keys.clockwise],
-        [Keys.tap_left, Keys.clockwise],
-        [Keys.clockwise],
-        [Keys.tap_right, Keys.clockwise],
-        [Keys.tap_right, Keys.tap_right, Keys.clockwise],
-        [Keys.DAS_right, Keys.tap_left, Keys.clockwise],
-        [Keys.DAS_right, Keys.clockwise],                       # clockwise rotations
+        [Keys.DAS_LEFT, Keys.CLOCKWISE],
+        [Keys.TAP_LEFT, Keys.TAP_LEFT, Keys.CLOCKWISE],
+        [Keys.TAP_LEFT, Keys.CLOCKWISE],
+        [Keys.CLOCKWISE],
+        [Keys.TAP_RIGHT, Keys.CLOCKWISE],
+        [Keys.TAP_RIGHT, Keys.TAP_RIGHT, Keys.CLOCKWISE],
+        [Keys.DAS_RIGHT, Keys.TAP_LEFT, Keys.CLOCKWISE],
+        [Keys.DAS_RIGHT, Keys.CLOCKWISE],                       # CLOCKWISE rotations
         
-        [Keys.DAS_left, Keys.anticlockwise],
-        [Keys.tap_left, Keys.tap_left, Keys.anticlockwise],
-        [Keys.tap_left, Keys.anticlockwise],
-        [Keys.anticlockwise],
-        [Keys.tap_right, Keys.anticlockwise],
-        [Keys.tap_right, Keys.tap_right, Keys.anticlockwise],
-        [Keys.DAS_right, Keys.tap_left, Keys.anticlockwise],
-        [Keys.DAS_right, Keys.anticlockwise],                   # anticlockwise rotations
+        [Keys.DAS_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.TAP_LEFT, Keys.TAP_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.TAP_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.ANTICLOCKWISE],
+        [Keys.TAP_RIGHT, Keys.ANTICLOCKWISE],
+        [Keys.TAP_RIGHT, Keys.TAP_RIGHT, Keys.ANTICLOCKWISE],
+        [Keys.DAS_RIGHT, Keys.TAP_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.DAS_RIGHT, Keys.ANTICLOCKWISE],                   # ANTICLOCKWISE rotations
         
-        [Keys.DAS_left, Keys.rotate_180],
-        [Keys.tap_left, Keys.tap_left, Keys.rotate_180],
-        [Keys.tap_left, Keys.rotate_180],
-        [Keys.rotate_180],
-        [Keys.tap_right, Keys.rotate_180],
-        [Keys.tap_right, Keys.tap_right, Keys.rotate_180],
-        [Keys.DAS_right, Keys.tap_left, Keys.rotate_180],
-        [Keys.DAS_right, Keys.rotate_180],                      # 180 rotations
+        [Keys.DAS_LEFT, Keys.ROTATE_180],
+        [Keys.TAP_LEFT, Keys.TAP_LEFT, Keys.ROTATE_180],
+        [Keys.TAP_LEFT, Keys.ROTATE_180],
+        [Keys.ROTATE_180],
+        [Keys.TAP_RIGHT, Keys.ROTATE_180],
+        [Keys.TAP_RIGHT, Keys.TAP_RIGHT, Keys.ROTATE_180],
+        [Keys.DAS_RIGHT, Keys.TAP_LEFT, Keys.ROTATE_180],
+        [Keys.DAS_RIGHT, Keys.ROTATE_180],                      # 180 rotations
         
-        [Keys.clockwise, Keys.DAS_left],
-        [Keys.anticlockwise, Keys.DAS_right],                   # Spin first DAS
+        [Keys.CLOCKWISE, Keys.DAS_LEFT],
+        [Keys.ANTICLOCKWISE, Keys.DAS_RIGHT],                   # Spin first DAS
     ]
     _spins = [
         [],
-        [Keys.soft_drop, Keys.clockwise],
-        [Keys.soft_drop, Keys.anticlockwise],
-        [Keys.soft_drop, Keys.rotate_180],
-        [Keys.soft_drop, Keys.clockwise, Keys.clockwise],
-        [Keys.soft_drop, Keys.anticlockwise, Keys.anticlockwise],
-        [Keys.soft_drop, Keys.clockwise, Keys.rotate_180],
-        [Keys.soft_drop, Keys.anticlockwise, Keys.rotate_180]
+        [Keys.SOFT_DROP, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.CLOCKWISE, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.CLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ROTATE_180]
     ]
