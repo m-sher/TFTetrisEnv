@@ -1,10 +1,10 @@
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
-from RotationSystem import RotationSystem
-from Scorer import Scorer
-from Pieces import Piece, PieceType
-from Moves import Moves, Keys
+from .RotationSystem import RotationSystem
+from .Scorer import Scorer
+from .Pieces import Piece, PieceType
+from .Moves import Moves, Keys
 import numpy as np
 import random
 
@@ -43,6 +43,8 @@ class TetrisPyEnv(py_environment.PyEnvironment):
             'spin': array_spec.BoundedArraySpec(
                 shape=(), dtype=np.int32, minimum=0, maximum=7, name='spin')
         }
+
+        print("Initialized Env", flush=True)
 
     def action_spec(self):
         return self._action_spec

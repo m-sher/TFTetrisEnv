@@ -1,6 +1,6 @@
 from enum import Enum
-from Pieces import Piece, PieceType
-from Moves import Keys
+from .Pieces import Piece, PieceType
+from .Moves import Keys
 import numpy as np
 
 class Spins(Enum):

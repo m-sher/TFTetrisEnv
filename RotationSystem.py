@@ -1,4 +1,4 @@
-from Pieces import PieceType, Piece
+from .Pieces import PieceType, Piece
 import numpy as np
 
 class RotationSystem():
