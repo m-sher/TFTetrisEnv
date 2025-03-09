@@ -10,13 +10,11 @@ import random
 
 class TetrisPyEnv(py_environment.PyEnvironment):
 
-    def __init__(self, queue_size, seed):
+    def __init__(self, queue_size, seed, idx):
 
         self._seed = seed
 
         self._random = random.Random(seed)
-
-        self._queue_size = queue_size
 
         self._board = np.zeros((24, 10), dtype=np.float32)
 
@@ -24,9 +22,19 @@ class TetrisPyEnv(py_environment.PyEnvironment):
 
         self._scorer = Scorer()
 
-        self._valid_pieces = [piece for piece in PieceType if piece is not PieceType.N]
+        self._hold_piece = PieceType.N
+        self._can_hold = True
 
-        self._reset()
+        self._queue_size = queue_size
+        self._valid_pieces = [piece for piece in PieceType if piece is not PieceType.N]
+        self._next_bag = self._random.sample(self._valid_pieces, len(self._valid_pieces))
+        self._active_piece = self._spawn_piece(self._next_bag.pop(0))
+        self._queue = []
+        self._fill_queue()
+
+        self._clears = 0
+        
+        self._episode_ended = False
 
         self._observation_spec = {
             'board': array_spec.BoundedArraySpec(
@@ -44,7 +52,18 @@ class TetrisPyEnv(py_environment.PyEnvironment):
                 shape=(), dtype=np.int32, minimum=0, maximum=7, name='spin')
         }
 
-        print("Initialized Env", flush=True)
+        self._reward_spec = {
+            'attack': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='attack'),
+            'step_reward': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='step_reward'),
+            'hole_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='hole_penalty'),
+            'death_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='death_penalty')
+        }
+
+        print(f"Initialized Env {idx}", flush=True)
 
     def action_spec(self):
         return self._action_spec
@@ -52,11 +71,19 @@ class TetrisPyEnv(py_environment.PyEnvironment):
     def observation_spec(self):
         return self._observation_spec
 
+    def reward_spec(self):
+        return self._reward_spec
+
     def _reset(self):
 
-        self._random = random.Random(self._seed + 1)
+        self._seed += 1
+
+        self._random = random.Random(self._seed)
 
         self._board[:] = 0
+
+        self._scorer.reset()
+
         self._hold_piece = PieceType.N
         self._can_hold = True
 
@@ -65,15 +92,14 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         self._queue = []
         self._fill_queue()
 
-        self._scorer.reset()
-
         self._clears = 0
 
         self._episode_ended = False
 
         observation = self._create_observation()
 
-        return ts.restart(observation)
+        return ts.restart(observation=observation,
+                          reward_spec=self._reward_spec)
 
     def _step(self, action: dict[str, int]):
         # `_lock_piece` does not move piece to the bottom, and only tries
@@ -94,17 +120,28 @@ class TetrisPyEnv(py_environment.PyEnvironment):
                 if key == Keys.HARD_DROP:
                     self._episode_ended = not self._lock_piece()
 
-            attack, supp_reward = self._scorer.judge(self._active_piece, self._board, key, self._clears)
+            (attack, step_reward, hole_penalty,
+             death_penalty) = self._scorer.judge(self._active_piece, self._board,
+                                                 key, self._clears, self._episode_ended)
 
         self._fill_queue()
         self._can_hold = True
 
         observation = self._create_observation()
 
+        reward = {
+            'attack': attack,
+            'step_reward': step_reward,
+            'hole_penalty': hole_penalty,
+            'death_penalty': death_penalty
+        }
+
         if self._episode_ended:
-            return ts.termination(observation, reward=[attack, supp_reward])
+            return ts.termination(observation=observation,
+                                  reward=reward)
         else:
-            return ts.transition(observation, reward=[attack, supp_reward])
+            return ts.transition(observation=observation,
+                                 reward=reward)
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board
@@ -128,7 +165,7 @@ class TetrisPyEnv(py_environment.PyEnvironment):
 
         return observation
 
-    def _convert_to_keys(self, action: dict[str, int]):
+    def _convert_to_keys(self, action: dict[str, int]) -> list[int]:
         hold = Moves._holds[action['hold']]
         standard = Moves._standards[action['standard']]
         spin = Moves._spins[action['spin']]
