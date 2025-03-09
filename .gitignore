@@ -1,2 +1,4 @@
 /__pycache__
 /TFTetrisEnv.egg-info
+/build
+/TFTetrisEnv/__pycache__
