@@ -2,3 +2,5 @@
 /TFTetrisEnv.egg-info
 /build
 /TFTetrisEnv/__pycache__
+/new_checkpoints
+/wandb
