@@ -11,3 +11,4 @@ TensorFlow environment for RL with Tetris SRS+
 
 ### Done
 - ~~Standard scoring~~
+- ~~Pip installable~~
