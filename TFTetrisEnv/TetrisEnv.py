@@ -94,7 +94,7 @@ class TetrisPyEnv(py_environment.PyEnvironment):
                 if key == Keys.HARD_DROP:
                     self._episode_ended = not self._lock_piece()
 
-            reward = self._scorer.judge(self._active_piece, self._board, key, self._clears)
+            attack, supp_reward = self._scorer.judge(self._active_piece, self._board, key, self._clears)
 
         self._fill_queue()
         self._can_hold = True
@@ -102,9 +102,9 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         observation = self._create_observation()
 
         if self._episode_ended:
-            return ts.termination(observation, reward=reward)
+            return ts.termination(observation, reward=[attack, supp_reward])
         else:
-            return ts.transition(observation, reward=reward)
+            return ts.transition(observation, reward=[attack, supp_reward])
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board

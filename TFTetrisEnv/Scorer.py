@@ -114,6 +114,4 @@ class Scorer():
 
         supp_reward = self._supp_reward()
 
-        reward = attack + supp_reward
-
-        return reward
+        return attack, supp_reward
