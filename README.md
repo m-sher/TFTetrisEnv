@@ -1,4 +1,4 @@
-# TensorFlow-Tetris-SRS-Plus
+# TFTetrisEnv
 TensorFlow environment for RL with Tetris SRS+
 
 ## Todo
