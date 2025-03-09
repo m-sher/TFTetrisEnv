@@ -41,7 +41,7 @@ class Scorer():
     def _get_heights(self, board: np.ndarray) -> np.ndarray:
         # Get heights of each column in the board
 
-        height_matrix = np.arange(board.shape[0]-1, -1, -1)[..., None]
+        height_matrix = np.arange(board.shape[0], 0, -1)[..., None]
         heights = np.max(board * height_matrix, axis=0)
 
         return heights
