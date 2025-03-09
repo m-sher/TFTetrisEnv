@@ -14,20 +14,54 @@ class Scorer():
 
     def __init__(self):
 
-        self.reset()
+        self._b2b = 0
+        self._combo = 0
+        self._spin = Spins.NO_SPIN
+        
+        self._pf_attack = np.array([0, 5, 6, 7, 9], dtype=np.float32)
+        self._ts_attack = np.array([0, 2, 4, 6, 0], dtype=np.float32)
+        self._tsm_attack = np.array([0, 0, 1, 2, 0], dtype=np.float32)
+        self._clear_attack = np.array([0, 0, 1, 2, 4], dtype=np.float32)
+
+        self._step_reward = np.array(0.1, dtype=np.float32)
+        self._hole_penalty = np.array(-0.025, dtype=np.float32)
+        self._max_hole_penalty = np.array(-0.099, dtype=np.float32)
+        self._death_penalty = np.array(-1.0, dtype=np.float32)
 
     def reset(self):
         self._b2b = 0
         self._combo = 0
-
         self._spin = Spins.NO_SPIN
     
-    def _supp_reward(self) -> float:
-        # TODO
-        # actual supplemental rewards (bumpiness, holes, etc)
-        return 0.1
+    def _get_holes(self, board: np.ndarray, heights: np.ndarray) -> int:
+        # Count holes in the board
+        holes = np.sum(heights - np.sum(board, axis=0))
+        return holes
 
-    def judge(self, piece: Piece, board: np.ndarray, key, clears) -> float:
+    def _get_heights(self, board: np.ndarray) -> np.ndarray:
+        # Get heights of each column in the board
+
+        height_matrix = np.arange(board.shape[0]-1, -1, -1)[..., None]
+        heights = np.max(board * height_matrix, axis=0)
+
+        return heights
+
+    def _supp_reward(self, board: np.ndarray, ended: bool) -> float:
+        # TODO
+        # More supplemental rewards
+
+        # Get heights of each column in the board
+        heights = self._get_heights(board)
+
+        # Get number of holes in the board
+        holes = self._get_holes(board, heights)
+
+        # Compute rewards
+        hole_penalty = np.maximum(holes * self._hole_penalty, self._max_hole_penalty)
+        death_penalty = self._death_penalty if ended else 0
+        return self._step_reward, hole_penalty, death_penalty
+
+    def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int, ended: bool) -> float:
 
         # TODO
         # all-mini+ immobile spin detection
@@ -99,19 +133,19 @@ class Scorer():
                 self._combo = 0
 
             if perfect_clear:
-                attack += [0, 5, 6, 7, 9][clears]
+                attack += self._pf_attack[clears]
 
             elif self._spin == Spins.T_SPIN:
-                attack += [0, 2, 4, 6, 0][clears]
+                attack += self._ts_attack[clears]
 
             elif self._spin == Spins.T_SPIN_MINI:
-                attack += [0, 0, 1, 2, 0][clears]
+                attack += self._tsm_attack[clears]
 
             else:
-                attack += [0, 0, 1, 2, 4][clears]
+                attack += self._clear_attack[clears]
 
             self._spin = Spins.NO_SPIN
 
-        supp_reward = self._supp_reward()
+        step_reward, hole_penalty, death_penalty = self._supp_reward(board, ended)
 
-        return attack, supp_reward
+        return attack, step_reward, hole_penalty, death_penalty
