@@ -59,8 +59,6 @@ class TetrisPyEnv(py_environment.PyEnvironment):
                 shape=(), dtype=np.float32, name='step_reward'),
             'hole_penalty': array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name='hole_penalty'),
-            'death_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='death_penalty')
         }
 
         print(f"Initialized Env {idx}", flush=True)
@@ -120,9 +118,9 @@ class TetrisPyEnv(py_environment.PyEnvironment):
                 if key == Keys.HARD_DROP:
                     self._episode_ended = not self._lock_piece()
 
-            (attack, step_reward, hole_penalty,
-             death_penalty) = self._scorer.judge(self._active_piece, self._board,
-                                                 key, self._clears, self._episode_ended)
+            (attack, step_reward,
+             hole_penalty) = self._scorer.judge(self._active_piece, self._board,
+                                                key, self._clears, self._episode_ended)
 
         self._fill_queue()
         self._can_hold = True
@@ -132,8 +130,7 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         reward = {
             'attack': attack,
             'step_reward': step_reward,
-            'hole_penalty': hole_penalty,
-            'death_penalty': death_penalty
+            'hole_penalty': hole_penalty
         }
 
         if self._episode_ended:

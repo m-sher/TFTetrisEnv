@@ -24,9 +24,8 @@ class Scorer():
         self._clear_attack = np.array([0, 0, 1, 2, 4], dtype=np.float32)
 
         self._step_reward = np.array(0.1, dtype=np.float32)
-        self._hole_penalty = np.array(-0.025, dtype=np.float32)
+        self._hole_penalty = np.array(-0.05, dtype=np.float32)
         self._max_hole_penalty = np.array(-0.099, dtype=np.float32)
-        self._death_penalty = np.array(-1.0, dtype=np.float32)
 
     def reset(self):
         self._b2b = 0
@@ -46,7 +45,7 @@ class Scorer():
 
         return heights
 
-    def _supp_reward(self, board: np.ndarray, ended: bool) -> float:
+    def _supp_reward(self, board: np.ndarray) -> float:
         # TODO
         # More supplemental rewards
 
@@ -58,8 +57,7 @@ class Scorer():
 
         # Compute rewards
         hole_penalty = np.maximum(holes * self._hole_penalty, self._max_hole_penalty)
-        death_penalty = self._death_penalty if ended else 0
-        return self._step_reward, hole_penalty, death_penalty
+        return self._step_reward, hole_penalty
 
     def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int, ended: bool) -> float:
 
@@ -146,6 +144,6 @@ class Scorer():
 
             self._spin = Spins.NO_SPIN
 
-        step_reward, hole_penalty, death_penalty = self._supp_reward(board, ended)
+        step_reward, hole_penalty = self._supp_reward(board)
 
-        return attack, step_reward, hole_penalty, death_penalty
+        return attack, step_reward, hole_penalty
