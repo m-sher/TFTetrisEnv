@@ -3,9 +3,7 @@ import numpy as np
 
 class RotationSystem():
     
-    def __init__(self, board):
-        
-        self._board = board
+    def __init__(self):
         
         self.orientations = {
             PieceType.I: np.array([
@@ -84,23 +82,24 @@ class RotationSystem():
             (3, 1): np.array([[+0, -1], [-2, -1], [-1, -1], [-2, +0], [-1, +0]], dtype=np.int32),  # L -> R
         }
     
-    def overlaps(self, cells: np.ndarray, loc: np.ndarray) -> bool:
+    def overlaps(self, cells: np.ndarray, loc: np.ndarray, board: np.ndarray) -> bool:
         cell_coords = cells + loc
         rows, cols = cell_coords.T
         
         # Outside board vertically
-        if np.any(rows < 0) or np.any(rows > self._board.shape[0] - 1):
+        if np.any(rows < 0) or np.any(rows > board.shape[0] - 1):
             return True
         # Outside board horizontally
-        if np.any(cols < 0) or np.any(cols > self._board.shape[1] - 1):
+        if np.any(cols < 0) or np.any(cols > board.shape[1] - 1):
             return True
         # Overlaps occupied cell
-        if np.any(self._board[rows, cols] != 0):
+        if np.any(board[rows, cols] != 0):
             return True
         
         return False
         
-    def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece, cells: np.ndarray, new_r: int, delta_r: int):
+    def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece,
+                   cells: np.ndarray, new_r: int, delta_r: int, board: np.ndarray):
         if (piece.r, new_r) not in kick_table.keys():
             # Rotation not possible, do nothing
             piece.delta_r = 0
@@ -109,7 +108,7 @@ class RotationSystem():
         
         for delta_loc in kick_table[(piece.r, new_r)]:
             # Check each kick and perform the first valid
-            if not self.overlaps(cells=cells, loc=piece.loc + delta_loc):
+            if not self.overlaps(cells=cells, loc=piece.loc + delta_loc, board=board):
                 # Kick doesn't overlap, so apply it and break
                 piece.r = new_r
                 piece.delta_r = delta_r    
