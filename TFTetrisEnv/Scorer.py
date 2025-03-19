@@ -18,48 +18,12 @@ class Scorer():
         self._combo = 0
         self._spin = Spins.NO_SPIN
         
-        self._pf_attack = np.array([0, 5, 6, 7, 9], dtype=np.float32)
-        self._ts_attack = np.array([0, 2, 4, 6, 0], dtype=np.float32)
-        self._tsm_attack = np.array([0, 0, 1, 2, 0], dtype=np.float32)
-        self._clear_attack = np.array([0, 0, 1, 2, 4], dtype=np.float32)
-
-        self._step_reward = np.array(0.1, dtype=np.float32)
-        self._hole_penalty = np.array(-0.05, dtype=np.float32)
-        self._max_hole_penalty = np.array(-0.099, dtype=np.float32)
-
     def reset(self):
         self._b2b = 0
         self._combo = 0
         self._spin = Spins.NO_SPIN
-    
-    def _get_holes(self, board: np.ndarray, heights: np.ndarray) -> int:
-        # Count holes in the board
-        holes = np.sum(heights - np.sum(board, axis=0))
-        return holes
 
-    def _get_heights(self, board: np.ndarray) -> np.ndarray:
-        # Get heights of each column in the board
-
-        height_matrix = np.arange(board.shape[0], 0, -1)[..., None]
-        heights = np.max(board * height_matrix, axis=0)
-
-        return heights
-
-    def _supp_reward(self, board: np.ndarray) -> float:
-        # TODO
-        # More supplemental rewards
-
-        # Get heights of each column in the board
-        heights = self._get_heights(board)
-
-        # Get number of holes in the board
-        holes = self._get_holes(board, heights)
-
-        # Compute rewards
-        hole_penalty = np.maximum(holes * self._hole_penalty, self._max_hole_penalty)
-        return self._step_reward, hole_penalty
-
-    def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int, ended: bool) -> float:
+    def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int) -> float:
 
         # TODO
         # all-mini+ immobile spin detection
@@ -131,19 +95,17 @@ class Scorer():
                 self._combo = 0
 
             if perfect_clear:
-                attack += self._pf_attack[clears]
+                attack += [0, 5, 6, 7, 9][clears]
 
             elif self._spin == Spins.T_SPIN:
-                attack += self._ts_attack[clears]
+                attack += [0, 2, 4, 6, 0][clears]
 
             elif self._spin == Spins.T_SPIN_MINI:
-                attack += self._tsm_attack[clears]
+                attack += [0, 0, 1, 2, 0][clears]
 
             else:
-                attack += self._clear_attack[clears]
+                attack += [0, 0, 1, 2, 4][clears]
 
             self._spin = Spins.NO_SPIN
 
-        step_reward, hole_penalty = self._supp_reward(board)
-
-        return attack, step_reward, hole_penalty
+        return attack
