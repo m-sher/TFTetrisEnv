@@ -306,7 +306,7 @@ class TetrisPyEnv(py_environment.PyEnvironment):
 
         active_piece = self._spawn_piece(queue.pop(0))
 
-        top_out = np.any(board[:4] == 0)
+        top_out = np.any(board[:4] != 0)
 
         return clears, top_out, active_piece, board, queue
 
@@ -339,9 +339,6 @@ class TetrisPyEnv(py_environment.PyEnvironment):
         return heights
 
     def _board_stats(self, board: np.ndarray) -> float:
-        # TODO
-        # More supplemental rewards
-
         # Get heights of each column in the board
         heights = self._get_heights(board)
 
