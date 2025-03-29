@@ -83,3 +83,24 @@ class Moves:
         [Keys.SOFT_DROP, Keys.CLOCKWISE, Keys.ROTATE_180],
         [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ROTATE_180]
     ]
+
+class Convert:
+    # 3D array where shape is (num_holds, num_standards, num_spins)
+    # and value is the corresponding index in list of all moves
+    to_ind = np.array([
+        [[hold * len(Moves._standards) * len(Moves._spins) +
+          standard * len(Moves._spins) +
+          spin
+          for spin in range(len(Moves._spins))]
+         for standard in range(len(Moves._standards))]
+        for hold in range(len(Moves._holds))
+    ], dtype=np.int32)
+
+    # 2D array where shape is (num_moves, 3)
+    # and value is [hold, standard, spin]
+    to_move = np.array([
+        [hold, standard, spin]
+        for hold in range(len(Moves._holds))
+        for standard in range(len(Moves._standards))
+        for spin in range(len(Moves._spins))
+    ], dtype=np.int32)
