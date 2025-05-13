@@ -84,6 +84,10 @@ class Moves:
         [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ROTATE_180]
     ]
 
+def pad_sequence(sequence):
+    padded_sequence = sequence + [Keys.PAD] * (9 - len(sequence))
+    return padded_sequence
+
 class Convert:
     # 3D array where shape is (num_holds, num_standards, num_spins)
     # and value is the corresponding index in list of all moves
@@ -103,4 +107,11 @@ class Convert:
         for hold in range(len(Moves._holds))
         for standard in range(len(Moves._standards))
         for spin in range(len(Moves._spins))
+    ], dtype=np.int32)
+
+    to_sequence = np.array([
+        pad_sequence([Keys.START] + hold + standard + spin + [Keys.HARD_DROP])
+        for hold in Moves._holds
+        for standard in Moves._standards
+        for spin in Moves._spins
     ], dtype=np.int32)

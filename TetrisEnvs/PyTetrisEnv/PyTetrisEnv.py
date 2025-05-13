@@ -14,9 +14,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
     def __init__(self, queue_size, max_holes, seed, idx):
 
-        self._hole_penalty = -0.5
-        self._height_penalty = -0.3
-        self._bumpy_penalty = -0.2
+        self._hole_penalty = -0.1
+        self._height_penalty = -0.02
+        self._skyline_penalty = -0.04
+        self._bumpy_penalty = -0.04
         self._death_penalty = -10.0
 
         self._max_holes = max_holes
@@ -25,7 +26,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._random = random.Random(seed)
 
-        self._board = np.zeros((24, 10), dtype=np.int32)
+        self._board = np.zeros((24, 10), dtype=np.float32)
 
         self._rotation_system = RotationSystem()
 
@@ -33,6 +34,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._last_heights = 0
         self._last_holes = 0
+        self._last_skyline = 0
         self._last_bumpy = 0
 
         self._hold_piece = PieceType.N
@@ -47,19 +49,14 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._observation_spec = {
             'board': array_spec.BoundedArraySpec(
-                shape=(24, 10), dtype=np.int32, minimum=0, maximum=1, name='board'),
+                shape=(24, 10, 1), dtype=np.float32, minimum=0.0, maximum=1.0, name='board'),
             'pieces': array_spec.BoundedArraySpec(
-                shape=(2 + queue_size,), dtype=np.int32, minimum=0, maximum=7, name='pieces')
+                shape=(2 + queue_size,), dtype=np.int64, minimum=0, maximum=7, name='pieces')
         }
 
-        self._action_spec = {
-            'hold': array_spec.BoundedArraySpec(
-                shape=(), dtype=np.int32, minimum=0, maximum=len(Moves._holds) - 1, name='hold'),
-            'standard': array_spec.BoundedArraySpec(
-                shape=(), dtype=np.int32, minimum=0, maximum=len(Moves._standards) - 1, name='standard'),
-            'spin': array_spec.BoundedArraySpec(
-                shape=(), dtype=np.int32, minimum=0, maximum=len(Moves._spins) - 1, name='spin')
-        }
+        self._action_spec = array_spec.BoundedArraySpec(
+            shape=(9,), dtype=np.int64, minimum=0, maximum=11, name='key_sequence'
+        )
 
         self._reward_spec = {
             'attack': array_spec.ArraySpec(
@@ -68,6 +65,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 shape=(), dtype=np.float32, name='height_penalty'),
             'hole_penalty': array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name='hole_penalty'),
+            'skyline_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='skyline_penalty'),
             'bumpy_penalty': array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name='bumpy_penalty'),
             'death_penalty': array_spec.ArraySpec(
@@ -85,19 +84,19 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def reward_spec(self):
         return self._reward_spec
 
-
     def _reset(self):
 
         self._seed += 1
 
         self._random = random.Random(self._seed)
 
-        self._board[:] = 0
+        self._board[:] = 0.0
 
         self._scorer.reset()
 
         self._last_heights = 0
         self._last_holes = 0
+        self._last_skyline = 0
         self._last_bumpy = 0
 
         self._hold_piece = PieceType.N
@@ -113,7 +112,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return ts.restart(observation=observation,
                           reward_spec=self._reward_spec)
     
-    def _step(self, action: Dict[str, int]):
+    def _step(self, key_sequence):
         """
         `_lock_piece` does not move piece to the bottom, and only tries
         locking at the current location. Action sequences all already end in
@@ -124,15 +123,16 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         (top_out, attack, board, active_piece,
          hold_piece, queue) = self._execute_action(self._board, self._active_piece,
-                                                   self._hold_piece, self._queue, action)
+                                                   self._hold_piece, self._queue, key_sequence)
         
         # Get board stats and compute supplementary rewards
-        sum_heights, sum_holes, sum_bumpy = self._board_stats(board)
-        height_penalty = self._height_penalty * (sum_heights - self._last_heights)
-        hole_penalty = self._hole_penalty * (sum_holes - self._last_holes)
-        bumpy_penalty = self._bumpy_penalty * (sum_bumpy - self._last_bumpy)
+        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
+        height_penalty = self._height_penalty * (heights_val - self._last_heights)
+        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
+        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
+        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
 
-        exceeded_holes = sum_holes > self._max_holes if self._max_holes is not None else False
+        exceeded_holes = holes_val > self._max_holes if self._max_holes is not None else False
         self._episode_ended = top_out or exceeded_holes
 
         queue = self._fill_queue(queue)
@@ -143,9 +143,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._hold_piece = hold_piece
         self._queue = queue        
 
-        self._last_heights = sum_heights
-        self._last_holes = sum_holes
-        self._last_bumpy = sum_bumpy
+        self._last_heights = heights_val
+        self._last_holes = holes_val
+        self._last_skyline = skyline_val
+        self._last_bumpy = bumpy_val
 
         observation = self._create_observation()
 
@@ -153,6 +154,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             'attack': np.array(attack),
             'height_penalty': np.array(height_penalty),
             'hole_penalty': np.array(hole_penalty),
+            'skyline_penalty': np.array(skyline_penalty),
             'bumpy_penalty': np.array(bumpy_penalty),
             'death_penalty': np.array(self._death_penalty) if self._episode_ended else np.array(0.0, dtype=np.float32)
         }
@@ -165,7 +167,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                                  reward=reward)
 
     def _execute_action(self, board: np.ndarray, active_piece: Piece, hold_piece: PieceType,
-                        queue: List[PieceType], action: Dict[str, int]) -> Tuple[bool, float, Piece, np.ndarray, List[PieceType]]:
+                        queue: List[PieceType], key_sequence: np.ndarray) -> Tuple[bool, float, Piece, np.ndarray, List[PieceType]]:
         
         # Avoid modifying original state
         board = copy.deepcopy(board)
@@ -174,7 +176,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         queue = copy.deepcopy(queue)
 
         # Convert action to key sequence        
-        key_sequence = self._convert_to_keys(action)
+        # key_sequence = self._convert_to_keys(action)
         clears = 0
         can_hold = True
         for key in key_sequence:
@@ -204,10 +206,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
     def _create_observation(self):
         pieces = [self._active_piece.piece_type, self._hold_piece] + self._queue
-        pieces = np.array([piece.value for piece in pieces], dtype=np.int32)
+        pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
 
         observation = {
-            'board': self._board,
+            'board': self._board[..., None],
             'pieces': pieces
         }
 
@@ -318,13 +320,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # This method assumes the piece is already in a settled position.
         cell_coords = active_piece.cells + active_piece.loc
 
-        board[cell_coords[:, 0], cell_coords[:, 1]] = 1
+        board[cell_coords[:, 0], cell_coords[:, 1]] = 1.0
 
         board, clears = self._clear_lines(board)
 
         active_piece = self._spawn_piece(queue.pop(0))
 
-        top_out = np.any(board[:4] != 0)
+        top_out = np.any(board[:4] != 0.0)
 
         return clears, top_out, active_piece, board, queue
 
@@ -338,9 +340,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _clear_lines(self, board: np.ndarray) -> Tuple[np.ndarray, int]:
         clears = 0
         for i, row in enumerate(board):
-            if np.all(row != 0):
+            if np.all(row != 0.0):
                 clears += 1
-                board[0] = 0
+                board[0] = 0.0
                 board[1:i+1] = board[:i]
         return board, clears
 
@@ -356,6 +358,15 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         holes = heights - np.sum(board, axis=0)
         return holes
 
+    def _get_skyline(self, heights: np.ndarray) -> int:
+        # Computes the difference between the hightest columns and lowest columns
+        # For a board with width 10, the skyline is the difference between the
+        # sum of the 5 highest columns and the sum of the 5 lowest columns
+        sorted_heights = np.sort(heights)
+        num_cols = sorted_heights.shape[0]
+        skyline = np.sum(sorted_heights[-num_cols//2:]) - np.sum(sorted_heights[:num_cols//2])
+        return skyline
+
     def _get_bumpy(self, heights: np.ndarray) -> np.ndarray:
         # Get bumpiness of the board
         bumpy = np.abs(heights[:-1] - heights[1:])
@@ -364,15 +375,18 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _board_stats(self, board: np.ndarray) -> Tuple[int, int, int]:
         # Get total heights of the board
         heights = self._get_heights(board)
-        sum_heights = np.sum(heights)
+        heights_val = np.sum(heights)
 
         # Get number of holes in the board
         holes = self._get_holes(board, heights)
-        sum_holes = np.sum(holes)
+        holes_val = np.sum(holes)
         
+        # Get skyline of the board
+        skyline_val = self._get_skyline(heights)
+
         # Get bumpiness of the board
         bumpy = self._get_bumpy(heights)
-        sum_bumpy = np.sum(bumpy)
+        bumpy_val = np.sum(bumpy)
 
         # Return heights, holes, and bumpy
-        return sum_heights, sum_holes, sum_bumpy
+        return heights_val, holes_val, skyline_val, bumpy_val

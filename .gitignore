@@ -3,3 +3,9 @@
 /build
 /TFTetrisEnv/__pycache__
 /wandb
+/TetrisEnvs.egg-info
+/logdir
+/tests
+/TetrisEnvs/__pycache__
+/TetrisEnvs/PyTetrisEnv/__pycache__
+/TetrisEnvs/TFTetrisEnv/__pycache__

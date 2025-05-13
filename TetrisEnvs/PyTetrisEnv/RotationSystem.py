@@ -100,12 +100,14 @@ class RotationSystem():
         
     def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece,
                    cells: np.ndarray, new_r: int, delta_r: int, board: np.ndarray):
+        # Do I ever need to check this?
         if (piece.r, new_r) not in kick_table.keys():
             # Rotation not possible, do nothing
             piece.delta_r = 0
             piece.delta_loc = np.zeros((2,), dtype=np.int32)
             return
         
+        kicked = False
         for delta_loc in kick_table[(piece.r, new_r)]:
             # Check each kick and perform the first valid
             if not self.overlaps(cells=cells, loc=piece.loc + delta_loc, board=board):
@@ -117,7 +119,11 @@ class RotationSystem():
                 piece.delta_loc = delta_loc
                 
                 piece.cells = cells
-                return 
-    
-        piece.delta_loc = np.zeros((2,), dtype=np.int32)
-        piece.delta_r = 0
+                kicked = True
+                break
+        
+        if not kicked:
+            piece.delta_loc = np.zeros((2,), dtype=np.int32)
+            piece.delta_r = 0
+
+        return kicked, piece.cells, piece.loc, piece.r, piece.delta_r, piece.delta_loc
