@@ -12,15 +12,17 @@ from typing import List, Dict, Tuple
 
 class PyTetrisEnv(py_environment.PyEnvironment):
 
-    def __init__(self, queue_size, max_holes, seed, idx):
+    def __init__(self, queue_size, max_holes, max_height, seed, idx):
 
-        self._hole_penalty = -0.1
-        self._height_penalty = -0.02
-        self._skyline_penalty = -0.04
-        self._bumpy_penalty = -0.04
-        self._death_penalty = -10.0
+        self._clear_reward = 0.2
+        self._hole_penalty = -0.4
+        self._height_penalty = -0.1
+        self._skyline_penalty = -0.05
+        self._bumpy_penalty = -0.05
+        self._death_penalty = -5.0
 
         self._max_holes = max_holes
+        self._max_height = max_height
 
         self._seed = seed
 
@@ -61,6 +63,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._reward_spec = {
             'attack': array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name='attack'),
+            'clear': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='clear_reward'),
             'height_penalty': array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name='height_penalty'),
             'hole_penalty': array_spec.ArraySpec(
@@ -111,7 +115,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         return ts.restart(observation=observation,
                           reward_spec=self._reward_spec)
-    
+
     def _step(self, key_sequence):
         """
         `_lock_piece` does not move piece to the bottom, and only tries
@@ -121,10 +125,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
-        (top_out, attack, board, active_piece,
+        (top_out, clears, attack, board, active_piece,
          hold_piece, queue) = self._execute_action(self._board, self._active_piece,
                                                    self._hold_piece, self._queue, key_sequence)
-        
+        clear_reward = self._clear_reward * clears
+
         # Get board stats and compute supplementary rewards
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
         height_penalty = self._height_penalty * (heights_val - self._last_heights)
@@ -152,6 +157,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         reward = {
             'attack': np.array(attack),
+            'clear': np.array(clear_reward),
             'height_penalty': np.array(height_penalty),
             'hole_penalty': np.array(hole_penalty),
             'skyline_penalty': np.array(skyline_penalty),
@@ -191,7 +197,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
             attack = self._scorer.judge(active_piece, board, key, clears)
 
-        return top_out, attack, board, active_piece, hold_piece, queue
+        return top_out, clears, attack, board, active_piece, hold_piece, queue
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board
@@ -326,7 +332,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         active_piece = self._spawn_piece(queue.pop(0))
 
-        top_out = np.any(board[:4] != 0.0)
+        top_out = np.any(board[:24-self._max_height] != 0.0)
 
         return clears, top_out, active_piece, board, queue
 
@@ -361,10 +367,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _get_skyline(self, heights: np.ndarray) -> int:
         # Computes the difference between the hightest columns and lowest columns
         # For a board with width 10, the skyline is the difference between the
-        # sum of the 5 highest columns and the sum of the 5 lowest columns
+        # sum of the 4 highest columns and the sum of the next 4 highest columns
         sorted_heights = np.sort(heights)
-        num_cols = sorted_heights.shape[0]
-        skyline = np.sum(sorted_heights[-num_cols//2:]) - np.sum(sorted_heights[:num_cols//2])
+        skyline = np.sum(sorted_heights[-4:]) - np.sum(sorted_heights[2:-4])
         return skyline
 
     def _get_bumpy(self, heights: np.ndarray) -> np.ndarray:
@@ -375,7 +380,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _board_stats(self, board: np.ndarray) -> Tuple[int, int, int]:
         # Get total heights of the board
         heights = self._get_heights(board)
-        heights_val = np.sum(heights)
+        heights_val = np.max(heights)
 
         # Get number of holes in the board
         holes = self._get_holes(board, heights)
