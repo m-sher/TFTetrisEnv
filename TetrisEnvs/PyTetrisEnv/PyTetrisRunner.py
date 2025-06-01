@@ -2,11 +2,10 @@ from TetrisEnvs.PyTetrisEnv.PyTetrisEnv import PyTetrisEnv
 import tensorflow as tf
 from tf_agents.environments.parallel_py_environment import ParallelPyEnvironment
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
-import numpy as np
 import pygame
 
 class PyTetrisRunner:
-    def __init__(self, queue_size, max_holes, max_len, key_dim, num_steps, num_envs, p_model, v_model, seed=123):
+    def __init__(self, queue_size, max_holes, max_height, max_len, key_dim, num_steps, num_envs, p_model, v_model, seed=123):
 
         self._queue_size = queue_size
         self._max_len = max_len
@@ -19,6 +18,7 @@ class PyTetrisRunner:
 
         constructors = [lambda idx=i: PyTetrisEnv(queue_size=queue_size,
                                                   max_holes=max_holes,
+                                                  max_height=max_height,
                                                   seed=seed,
                                                   idx=idx)
                         for i in range(num_envs)]
@@ -41,6 +41,8 @@ class PyTetrisRunner:
                                     dynamic_size=False, element_shape=(self._num_envs,))
         all_attacks = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
                                      dynamic_size=False, element_shape=(self._num_envs,))
+        all_clears = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
+                                    dynamic_size=False, element_shape=(self._num_envs,))
         all_height_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
                                             dynamic_size=False, element_shape=(self._num_envs,))
         all_hole_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
@@ -68,6 +70,7 @@ class PyTetrisRunner:
             board = time_step.observation['board']
             pieces = time_step.observation['pieces']
 
+            
             # Render the frame
             if render:
                 for event in pygame.event.get():
@@ -88,6 +91,7 @@ class PyTetrisRunner:
 
             reward = time_step.reward
             attack = reward['attack']
+            clear = reward['clear']
             height_penalty = reward['height_penalty']
             hole_penalty = reward['hole_penalty']
             skyline_penalty = reward['skyline_penalty']
@@ -106,6 +110,7 @@ class PyTetrisRunner:
             
             # Store the penalties and rewards
             all_attacks = all_attacks.write(t, attack)
+            all_clears = all_clears.write(t, clear)
             all_height_penalty = all_height_penalty.write(t, height_penalty)
             all_hole_penalty = all_hole_penalty.write(t, hole_penalty)
             all_skyline_penalty = all_skyline_penalty.write(t, skyline_penalty)
@@ -121,6 +126,7 @@ class PyTetrisRunner:
         all_masks = all_masks.stack()
         all_values = all_values.stack()
         all_attacks = all_attacks.stack()
+        all_clears = all_clears.stack()
         all_height_penalty = all_height_penalty.stack()
         all_hole_penalty = all_hole_penalty.stack()
         all_skyline_penalty = all_skyline_penalty.stack()
@@ -129,6 +135,6 @@ class PyTetrisRunner:
         all_dones = all_dones.stack()
 
         return (all_boards, all_pieces, all_actions, all_log_probs,
-                all_masks, all_values, all_attacks, all_height_penalty,
-                all_hole_penalty, all_skyline_penalty,
+                all_masks, all_values, all_attacks, all_clears,
+                all_height_penalty, all_hole_penalty, all_skyline_penalty,
                 all_bumpy_penalty, all_death_penalty, all_dones)
