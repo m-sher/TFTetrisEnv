@@ -38,7 +38,7 @@ class PyTetrisRunner:
         all_masks = tf.TensorArray(dtype=tf.bool, size=self._num_steps,
                                    dynamic_size=False, element_shape=(self._num_envs, self._max_len, self._key_dim))
         all_values = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                    dynamic_size=False, element_shape=(self._num_envs,))
+                                    dynamic_size=False, element_shape=(self._num_envs, 1))
         all_attacks = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
                                      dynamic_size=False, element_shape=(self._num_envs,))
         all_clears = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
@@ -54,7 +54,7 @@ class PyTetrisRunner:
         all_death_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
                                            dynamic_size=False, element_shape=(self._num_envs,))
         all_dones = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                   dynamic_size=False, element_shape=(self._num_envs,))
+                                   dynamic_size=False, element_shape=(self._num_envs, 1))
 
         # Initialize pygame
         if render and not pygame.get_init():
@@ -85,7 +85,7 @@ class PyTetrisRunner:
                 pygame.display.update()
 
             key_sequence, log_probs, masks = self.p_model.predict((board, pieces))
-            values = tf.squeeze(self.v_model.predict((board, pieces)), axis=-1)
+            values = self.v_model.predict((board, pieces))
 
             time_step = self.env.step(key_sequence)
 
@@ -98,7 +98,7 @@ class PyTetrisRunner:
             bumpy_penalty = reward['bumpy_penalty']
             death_penalty = reward['death_penalty']
             
-            dones = tf.cast(time_step.is_last(), tf.float32)
+            dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
             # Store the data
             all_boards = all_boards.write(t, board)
