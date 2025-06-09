@@ -19,7 +19,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._height_penalty = -0.1
         self._skyline_penalty = -0.05
         self._bumpy_penalty = -0.05
-        self._death_penalty = -5.0
+        self._death_penalty = -100.0
 
         self._max_holes = max_holes
         self._max_height = max_height
