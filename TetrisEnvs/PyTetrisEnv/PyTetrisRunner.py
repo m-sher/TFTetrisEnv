@@ -84,7 +84,7 @@ class PyTetrisRunner:
                 screen.blit(board_surf, (0, 0))
                 pygame.display.update()
 
-            key_sequence, log_probs, masks = self.p_model.predict((board, pieces))
+            key_sequence, log_probs, masks, _ = self.p_model.predict((board, pieces))
             values = self.v_model.predict((board, pieces))
 
             time_step = self.env.step(key_sequence)
