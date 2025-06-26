@@ -12,7 +12,7 @@ from typing import List, Dict, Tuple
 
 class PyTetrisEnv(py_environment.PyEnvironment):
 
-    def __init__(self, queue_size, max_holes, max_height, seed, idx):
+    def __init__(self, queue_size, max_holes, max_height, att_freq, seed, idx):
 
         self._clear_reward = 0.2
         self._hole_penalty = -0.4
@@ -24,6 +24,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_holes = max_holes
         self._max_height = max_height
 
+        self._att_freq = att_freq
+
         self._seed = seed
 
         self._random = random.Random(seed)
@@ -33,11 +35,14 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._rotation_system = RotationSystem()
 
         self._scorer = Scorer()
+        
+        self._step_num = 0
 
         self._last_heights = 0
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
+        self._bag_attack = 0
 
         self._hold_piece = PieceType.N
 
@@ -98,10 +103,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._scorer.reset()
 
+        self._step_num = 0
+
         self._last_heights = 0
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
+        self._bag_attack = 0
 
         self._hold_piece = PieceType.N
 
@@ -138,7 +146,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
 
         exceeded_holes = holes_val > self._max_holes if self._max_holes is not None else False
-        self._episode_ended = top_out or exceeded_holes
+
+        if attack >= 4:
+            self._bag_attack = self._step_num
+        elif self._step_num - self._bag_attack > self._att_freq:
+            self._episode_ended = True
+
+        self._episode_ended = top_out or exceeded_holes or self._episode_ended
 
         queue = self._fill_queue(queue)
 
@@ -154,6 +168,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._last_bumpy = bumpy_val
 
         observation = self._create_observation()
+        
+        self._step_num += 1
 
         reward = {
             'attack': np.array(attack),

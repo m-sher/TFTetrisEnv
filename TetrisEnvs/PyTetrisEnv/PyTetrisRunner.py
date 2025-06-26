@@ -5,7 +5,7 @@ from tf_agents.environments.tf_py_environment import TFPyEnvironment
 import pygame
 
 class PyTetrisRunner:
-    def __init__(self, queue_size, max_holes, max_height, max_len, key_dim, num_steps, num_envs, p_model, v_model, seed=123):
+    def __init__(self, queue_size, max_holes, max_height, att_freq, max_len, key_dim, num_steps, num_envs, p_model, v_model, seed=123):
 
         self._queue_size = queue_size
         self._max_len = max_len
@@ -19,6 +19,7 @@ class PyTetrisRunner:
         constructors = [lambda idx=i: PyTetrisEnv(queue_size=queue_size,
                                                   max_holes=max_holes,
                                                   max_height=max_height,
+                                                  att_freq=att_freq,
                                                   seed=seed,
                                                   idx=idx)
                         for i in range(num_envs)]
@@ -84,7 +85,7 @@ class PyTetrisRunner:
                 screen.blit(board_surf, (0, 0))
                 pygame.display.update()
 
-            key_sequence, log_probs, masks = self.p_model.predict((board, pieces))
+            key_sequence, log_probs, masks, _ = self.p_model.predict((board, pieces))
             values = self.v_model.predict((board, pieces))
 
             time_step = self.env.step(key_sequence)
