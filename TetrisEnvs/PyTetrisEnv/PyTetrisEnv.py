@@ -211,7 +211,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 if key == Keys.HARD_DROP:
                     clears, top_out, active_piece, board, queue = self._lock_piece(active_piece, board, queue)
 
-            attack = self._scorer.judge(active_piece, board, key, clears)
+                attack = self._scorer.judge(active_piece, board, key, clears)
 
         return top_out, clears, attack, board, active_piece, hold_piece, queue
 
