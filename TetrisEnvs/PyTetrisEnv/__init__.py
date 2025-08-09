@@ -14,15 +14,16 @@ from .PyTetrisRunner import PyTetrisRunner
 __version__ = "0.4.0"
 
 __all__ = [
-    'PieceType',
-    'Piece',
-    'Keys',
-    'Moves',
-    'RotationSystem',
-    'Scorer',
-    'PyTetrisEnv',
-    'PyTetrisRunner'
+    "PieceType",
+    "Piece",
+    "Keys",
+    "Moves",
+    "RotationSystem",
+    "Scorer",
+    "PyTetrisEnv",
+    "PyTetrisRunner",
 ]
+
 
 def info():
     """Return basic package information."""

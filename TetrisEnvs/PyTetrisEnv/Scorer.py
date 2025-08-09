@@ -3,6 +3,7 @@ from .Pieces import Piece, PieceType
 from .Moves import Keys
 import numpy as np
 
+
 class Spins(Enum):
     # TODO
     # More spins
@@ -10,21 +11,19 @@ class Spins(Enum):
     T_SPIN_MINI = 1
     T_SPIN = 2
 
+
 class Scorer:
-
     def __init__(self) -> None:
-
         self._b2b = 0
         self._combo = 0
         self._spin = Spins.NO_SPIN
-        
+
     def reset(self) -> None:
         self._b2b = 0
         self._combo = 0
         self._spin = Spins.NO_SPIN
 
     def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int) -> float:
-
         # TODO
         # all-mini+ immobile spin detection
 
@@ -34,30 +33,44 @@ class Scorer:
             if piece.delta_r != 0:
                 # Check for corners clockwise from top-left
                 # Corners are filled if cell is nonzero or out of board
-                corner_cells = np.array([[0, 0], [0, 2], [2, 2], [2, 0]], dtype=np.int32)
+                corner_cells = np.array(
+                    [[0, 0], [0, 2], [2, 2], [2, 0]], dtype=np.int32
+                )
 
                 # Check out of bounds corners
-                corner_inds = piece.loc + corner_cells # 4, 2
-                corners = np.any([np.any(corner_inds >= board.shape, axis=-1),
-                                  np.any(corner_inds < 0, axis=-1)], axis=0)
+                corner_inds = piece.loc + corner_cells  # 4, 2
+                corners = np.any(
+                    [
+                        np.any(corner_inds >= board.shape, axis=-1),
+                        np.any(corner_inds < 0, axis=-1),
+                    ],
+                    axis=0,
+                )
 
                 # Check in bounds corners
-                corner_inds = np.maximum(0, np.minimum(corner_inds, [board.shape[0] - 1,
-                                                                     board.shape[1] - 1]))
-                corners = np.any([corners,
-                                  board[corner_inds[:, 0],
-                                        corner_inds[:, 1]] != 0], axis=0)
+                corner_inds = np.maximum(
+                    0, np.minimum(corner_inds, [board.shape[0] - 1, board.shape[1] - 1])
+                )
+                corners = np.any(
+                    [corners, board[corner_inds[:, 0], corner_inds[:, 1]] != 0], axis=0
+                )
 
                 # Find back cell in same order as corners. Corners[back] is
                 # is the corner anticlockwise relative to the cell
                 back = None
-                for i, cell in enumerate(np.array([[0, 1], [1, 2], [2, 1], [1, 0]], np.int32)):
+                for i, cell in enumerate(
+                    np.array([[0, 1], [1, 2], [2, 1], [1, 0]], np.int32)
+                ):
                     if not np.any(np.all(piece.cells == cell, axis=-1)):
                         back = i
                         break
 
-                front_corners = np.sum([corners[(back + 2) % 4], corners[(back + 3) % 4]])
-                back_corners = np.sum([corners[(back + 0) % 4], corners[(back + 1) % 4]])
+                front_corners = np.sum(
+                    [corners[(back + 2) % 4], corners[(back + 3) % 4]]
+                )
+                back_corners = np.sum(
+                    [corners[(back + 0) % 4], corners[(back + 1) % 4]]
+                )
 
                 if front_corners == 2 and back_corners >= 1:
                     # Proper T spin
@@ -74,12 +87,11 @@ class Scorer:
                     # Fails to pass corner rules, not a T spin
                     self._spin = Spins.NO_SPIN
             elif np.any(piece.delta_loc != 0) or key == Keys.HOLD:
-                    # Remove any active spins on HOLD or if movement
-                    # is caused by anything other than a kick
-                    self._spin = Spins.NO_SPIN
+                # Remove any active spins on HOLD or if movement
+                # is caused by anything other than a kick
+                self._spin = Spins.NO_SPIN
 
         if key == Keys.HARD_DROP:
-
             perfect_clear = np.all(board == 0)
 
             if clears:

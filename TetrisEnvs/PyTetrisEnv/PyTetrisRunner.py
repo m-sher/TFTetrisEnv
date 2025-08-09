@@ -5,11 +5,22 @@ from tf_agents.environments.tf_py_environment import TFPyEnvironment
 import pygame
 from typing import Optional, Tuple, Any
 
-class PyTetrisRunner:
-    def __init__(self, queue_size: int, max_holes: Optional[int], max_height: int, max_steps: int,
-                 max_len: int, key_dim: int, num_steps: int, num_envs: int,
-                 p_model: Any, v_model: Any, seed: int = 123) -> None:
 
+class PyTetrisRunner:
+    def __init__(
+        self,
+        queue_size: int,
+        max_holes: Optional[int],
+        max_height: int,
+        max_steps: int,
+        max_len: int,
+        key_dim: int,
+        num_steps: int,
+        num_envs: int,
+        p_model: Any,
+        v_model: Any,
+        seed: int = 123,
+    ) -> None:
         self._queue_size = queue_size
         self._max_len = max_len
         self._key_dim = key_dim
@@ -19,46 +30,124 @@ class PyTetrisRunner:
         self.p_model = p_model
         self.v_model = v_model
 
-        constructors = [lambda idx=i: PyTetrisEnv(queue_size=queue_size,
-                                                  max_holes=max_holes,
-                                                  max_height=max_height,
-                                                  max_steps=max_steps,
-                                                  seed=seed,
-                                                  idx=idx)
-                        for i in range(num_envs)]
-        ppy_env = ParallelPyEnvironment(constructors, start_serially=True, blocking=False)
+        constructors = [
+            lambda idx=i: PyTetrisEnv(
+                queue_size=queue_size,
+                max_holes=max_holes,
+                max_height=max_height,
+                max_steps=max_steps,
+                seed=seed,
+                idx=idx,
+            )
+            for i in range(num_envs)
+        ]
+        ppy_env = ParallelPyEnvironment(
+            constructors, start_serially=True, blocking=False
+        )
         self.env = TFPyEnvironment(ppy_env)
 
-    def collect_trajectory(self, render: bool = False) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
-
-        all_boards = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                    dynamic_size=False, element_shape=(self._num_envs, 24, 10, 1))
-        all_pieces = tf.TensorArray(dtype=tf.int64, size=self._num_steps,
-                                    dynamic_size=False, element_shape=(self._num_envs, self._queue_size + 2))
-        all_actions = tf.TensorArray(dtype=tf.int64, size=self._num_steps,
-                                     dynamic_size=False, element_shape=(self._num_envs, self._max_len))
-        all_log_probs = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                       dynamic_size=False, element_shape=(self._num_envs, self._max_len))
-        all_masks = tf.TensorArray(dtype=tf.bool, size=self._num_steps,
-                                   dynamic_size=False, element_shape=(self._num_envs, self._max_len, self._key_dim))
-        all_values = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                    dynamic_size=False, element_shape=(self._num_envs, 1))
-        all_attacks = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                     dynamic_size=False, element_shape=(self._num_envs,))
-        all_clears = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                    dynamic_size=False, element_shape=(self._num_envs,))
-        all_height_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                            dynamic_size=False, element_shape=(self._num_envs,))
-        all_hole_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                          dynamic_size=False, element_shape=(self._num_envs,))
-        all_skyline_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                             dynamic_size=False, element_shape=(self._num_envs,))
-        all_bumpy_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                           dynamic_size=False, element_shape=(self._num_envs,))
-        all_death_penalty = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                           dynamic_size=False, element_shape=(self._num_envs,))
-        all_dones = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
-                                   dynamic_size=False, element_shape=(self._num_envs, 1))
+    def collect_trajectory(
+        self, render: bool = False
+    ) -> Tuple[
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+        tf.Tensor,
+    ]:
+        all_boards = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, 24, 10, 1),
+        )
+        all_pieces = tf.TensorArray(
+            dtype=tf.int64,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, self._queue_size + 2),
+        )
+        all_actions = tf.TensorArray(
+            dtype=tf.int64,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, self._max_len),
+        )
+        all_log_probs = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, self._max_len),
+        )
+        all_masks = tf.TensorArray(
+            dtype=tf.bool,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, self._max_len, self._key_dim),
+        )
+        all_values = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, 1),
+        )
+        all_attacks = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_clears = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_height_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_hole_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_skyline_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_bumpy_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_death_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_dones = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, 1),
+        )
 
         # Initialize pygame
         if render and not pygame.get_init():
@@ -69,12 +158,11 @@ class PyTetrisRunner:
             screen = pygame.display.get_surface()
 
         time_step = self.env.reset()
-        
-        for t in range(self._num_steps):
-            board = time_step.observation['board']
-            pieces = time_step.observation['pieces']
 
-            
+        for t in range(self._num_steps):
+            board = time_step.observation["board"]
+            pieces = time_step.observation["pieces"]
+
             # Render the frame
             if render:
                 for event in pygame.event.get():
@@ -83,7 +171,9 @@ class PyTetrisRunner:
                         return
                 screen.fill((0, 0, 0))
                 board_surf = pygame.Surface((10, 24))
-                pygame.surfarray.blit_array(board_surf, board[0, ..., 0].numpy().T * 255)
+                pygame.surfarray.blit_array(
+                    board_surf, board[0, ..., 0].numpy().T * 255
+                )
                 board_surf = pygame.transform.scale(board_surf, (250, 600))
                 screen.blit(board_surf, (0, 0))
                 pygame.display.update()
@@ -94,14 +184,14 @@ class PyTetrisRunner:
             time_step = self.env.step(key_sequence)
 
             reward = time_step.reward
-            attack = reward['attack']
-            clear = reward['clear']
-            height_penalty = reward['height_penalty']
-            hole_penalty = reward['hole_penalty']
-            skyline_penalty = reward['skyline_penalty']
-            bumpy_penalty = reward['bumpy_penalty']
-            death_penalty = reward['death_penalty']
-            
+            attack = reward["attack"]
+            clear = reward["clear"]
+            height_penalty = reward["height_penalty"]
+            hole_penalty = reward["hole_penalty"]
+            skyline_penalty = reward["skyline_penalty"]
+            bumpy_penalty = reward["bumpy_penalty"]
+            death_penalty = reward["death_penalty"]
+
             dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
             # Store the data
@@ -111,7 +201,7 @@ class PyTetrisRunner:
             all_log_probs = all_log_probs.write(t, log_probs)
             all_masks = all_masks.write(t, masks)
             all_values = all_values.write(t, values)
-            
+
             # Store the penalties and rewards
             all_attacks = all_attacks.write(t, attack)
             all_clears = all_clears.write(t, clear)
@@ -122,7 +212,7 @@ class PyTetrisRunner:
             all_death_penalty = all_death_penalty.write(t, death_penalty)
 
             all_dones = all_dones.write(t, dones)
-        
+
         all_boards = all_boards.stack()
         all_pieces = all_pieces.stack()
         all_actions = all_actions.stack()
@@ -138,7 +228,19 @@ class PyTetrisRunner:
         all_death_penalty = all_death_penalty.stack()
         all_dones = all_dones.stack()
 
-        return (all_boards, all_pieces, all_actions, all_log_probs,
-                all_masks, all_values, all_attacks, all_clears,
-                all_height_penalty, all_hole_penalty, all_skyline_penalty,
-                all_bumpy_penalty, all_death_penalty, all_dones)
+        return (
+            all_boards,
+            all_pieces,
+            all_actions,
+            all_log_probs,
+            all_masks,
+            all_values,
+            all_attacks,
+            all_clears,
+            all_height_penalty,
+            all_hole_penalty,
+            all_skyline_penalty,
+            all_bumpy_penalty,
+            all_death_penalty,
+            all_dones,
+        )

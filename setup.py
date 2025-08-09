@@ -1,6 +1,5 @@
-from setuptools import setup, Extension, find_packages
+from setuptools import setup, find_packages
 # from Cython.Build import cythonize
-import numpy as np
 
 # ext_modules = [
 #     Extension("TetrisEnvs.CTetrisEnv.CMoves",
@@ -21,17 +20,17 @@ import numpy as np
 # ]
 
 setup(
-    name='TetrisEnvs',
-    version='0.4.0',
-    description='Environments for RL with Tetris SRS+',
-    author='Michael Sherrick',
-    author_email='michael.a.sherrick@gmail.com',
-    url='https://github.com/m-sher/TFTetrisEnv',
+    name="TetrisEnvs",
+    version="0.4.0",
+    description="Environments for RL with Tetris SRS+",
+    author="Michael Sherrick",
+    author_email="michael.a.sherrick@gmail.com",
+    url="https://github.com/m-sher/TFTetrisEnv",
     packages=find_packages(),
     install_requires=[
-        'tensorflow',
-        'tf-agents',
-        'numpy',
+        "tensorflow",
+        "tf-agents",
+        "numpy",
     ],
     # ext_modules=cythonize(
     #     ext_modules,
@@ -40,8 +39,8 @@ setup(
     # include_dirs=[np.get_include()],
     # zip_safe=False,
     classifiers=[
-        'Programming Language :: Python :: 3',
-        'Operating System :: OS Independent',
+        "Programming Language :: Python :: 3",
+        "Operating System :: OS Independent",
     ],
-    python_requires='>=3.6',
+    python_requires=">=3.6",
 )

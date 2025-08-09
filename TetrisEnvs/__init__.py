@@ -22,23 +22,24 @@ from .TFTetrisEnv.TFScorer import TFScorer
 from .TFTetrisEnv.TFTetrisRunner import TFTetrisRunner
 
 __all__ = [
-    'PyTetrisEnv',
-    'PieceType', 
-    'Piece',
-    'Moves', 
-    'Keys',
-    'RotationSystem',
-    'Scorer',
-    'PyTetrisRunner',
-    'TFTetrisEnv',
-    'TFPieceType',
-    'TFMoves',
-    'TFKeys',
-    'TFConvert',
-    'TFRotationSystem',
-    'TFScorer',
-    'TFTetrisRunner'
+    "PyTetrisEnv",
+    "PieceType",
+    "Piece",
+    "Moves",
+    "Keys",
+    "RotationSystem",
+    "Scorer",
+    "PyTetrisRunner",
+    "TFTetrisEnv",
+    "TFPieceType",
+    "TFMoves",
+    "TFKeys",
+    "TFConvert",
+    "TFRotationSystem",
+    "TFScorer",
+    "TFTetrisRunner",
 ]
+
 
 def info():
     """Return basic package information."""

@@ -14,15 +14,16 @@ from .TFTetrisRunner import TFTetrisRunner
 __version__ = "0.4.0"
 
 __all__ = [
-    'TFTetrisEnv',
-    'TFPieceType',
-    'TFMoves',
-    'TFKeys',
-    'TFConvert',
-    'TFRotationSystem',
-    'TFScorer',
-    'TFTetrisRunner'
+    "TFTetrisEnv",
+    "TFPieceType",
+    "TFMoves",
+    "TFKeys",
+    "TFConvert",
+    "TFRotationSystem",
+    "TFScorer",
+    "TFTetrisRunner",
 ]
+
 
 def info():
     """Return basic package information."""
