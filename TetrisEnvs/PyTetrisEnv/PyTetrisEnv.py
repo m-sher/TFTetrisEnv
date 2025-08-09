@@ -12,19 +12,18 @@ from typing import List, Dict, Tuple
 
 class PyTetrisEnv(py_environment.PyEnvironment):
 
-    def __init__(self, queue_size, max_holes, max_height, att_freq, seed, idx):
+    def __init__(self, queue_size, max_holes, max_height, max_steps, seed, idx):
 
-        self._clear_reward = 0.2
-        self._hole_penalty = -0.4
-        self._height_penalty = -0.1
-        self._skyline_penalty = -0.05
-        self._bumpy_penalty = -0.05
+        self._clear_reward = 0.5
+        self._hole_penalty = -0.02
+        self._height_penalty = -0.01
+        self._skyline_penalty = -0.02
+        self._bumpy_penalty = -0.01
         self._death_penalty = -100.0
 
         self._max_holes = max_holes
         self._max_height = max_height
-
-        self._att_freq = att_freq
+        self._max_steps = max_steps
 
         self._seed = seed
 
@@ -42,7 +41,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
-        self._bag_attack = 0
 
         self._hold_piece = PieceType.N
 
@@ -95,7 +93,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
     def _reset(self):
 
-        self._seed += 1
+        self._seed = self._seed + 1 if self._seed else None
 
         self._random = random.Random(self._seed)
 
@@ -109,7 +107,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
-        self._bag_attack = 0
 
         self._hold_piece = PieceType.N
 
@@ -140,19 +137,16 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Get board stats and compute supplementary rewards
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
-        height_penalty = self._height_penalty * (heights_val - self._last_heights)
-        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
-        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
-        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
+        height_penalty = self._height_penalty * (heights_val - self._last_heights) * heights_val
+        hole_penalty = self._hole_penalty * (holes_val - self._last_holes) * holes_val
+        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline) * skyline_val
+        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy) * bumpy_val
 
         exceeded_holes = holes_val > self._max_holes if self._max_holes is not None else False
 
-        if attack >= 4:
-            self._bag_attack = self._step_num
-        elif self._step_num - self._bag_attack > self._att_freq:
-            self._episode_ended = True
+        died = top_out or exceeded_holes
 
-        self._episode_ended = top_out or exceeded_holes or self._episode_ended
+        death_penalty = self._death_penalty if died else 0.0
 
         queue = self._fill_queue(queue)
 
@@ -178,8 +172,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             'hole_penalty': np.array(hole_penalty),
             'skyline_penalty': np.array(skyline_penalty),
             'bumpy_penalty': np.array(bumpy_penalty),
-            'death_penalty': np.array(self._death_penalty) if self._episode_ended else np.array(0.0, dtype=np.float32)
+            'death_penalty': np.array(death_penalty)
         }
+
+        self._episode_ended = died or self._step_num >= self._max_steps
 
         if self._episode_ended:
             return ts.termination(observation=observation,
@@ -200,6 +196,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # Convert action to key sequence        
         # key_sequence = self._convert_to_keys(action)
         clears = 0
+        top_out = False
+        next_piece = None
+        attack = 0
         can_hold = True
         for key in key_sequence:
             if key == Keys.HOLD:
@@ -209,11 +208,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 active_piece = self._try_key_vector(key_vector, active_piece, board)
 
                 if key == Keys.HARD_DROP:
-                    clears, top_out, active_piece, board, queue = self._lock_piece(active_piece, board, queue)
+                    clears, top_out, next_piece, board, queue = self._lock_piece(active_piece, board, queue)
 
                 attack = self._scorer.judge(active_piece, board, key, clears)
 
-        return top_out, clears, attack, board, active_piece, hold_piece, queue
+        return top_out, clears, attack, board, next_piece, hold_piece, queue
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board
