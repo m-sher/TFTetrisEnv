@@ -3,9 +3,12 @@ import tensorflow as tf
 from tf_agents.environments.parallel_py_environment import ParallelPyEnvironment
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
 import pygame
+from typing import Optional, Tuple, Any
 
 class PyTetrisRunner:
-    def __init__(self, queue_size, max_holes, max_height, max_steps, max_len, key_dim, num_steps, num_envs, p_model, v_model, seed=123):
+    def __init__(self, queue_size: int, max_holes: Optional[int], max_height: int, max_steps: int,
+                 max_len: int, key_dim: int, num_steps: int, num_envs: int,
+                 p_model: Any, v_model: Any, seed: int = 123) -> None:
 
         self._queue_size = queue_size
         self._max_len = max_len
@@ -26,7 +29,7 @@ class PyTetrisRunner:
         ppy_env = ParallelPyEnvironment(constructors, start_serially=True, blocking=False)
         self.env = TFPyEnvironment(ppy_env)
 
-    def collect_trajectory(self, render=False):
+    def collect_trajectory(self, render: bool = False) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
 
         all_boards = tf.TensorArray(dtype=tf.float32, size=self._num_steps,
                                     dynamic_size=False, element_shape=(self._num_envs, 24, 10, 1))

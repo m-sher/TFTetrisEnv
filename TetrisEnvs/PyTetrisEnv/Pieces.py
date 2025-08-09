@@ -14,7 +14,7 @@ class PieceType(Enum):
 class Piece:
     def __init__(self, piece_type: PieceType = PieceType.N,
                  loc: np.ndarray = np.zeros((2,), dtype=np.int32),
-                 r: int = 0, cells: np.ndarray = np.zeros((4, 2), dtype=np.int32)):
+                 r: int = 0, cells: np.ndarray = np.zeros((4, 2), dtype=np.int32)) -> None:
         
         self.piece_type = piece_type
         

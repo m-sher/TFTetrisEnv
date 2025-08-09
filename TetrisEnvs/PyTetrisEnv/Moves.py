@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List, Dict
 
 class Keys:
     START = 0
@@ -84,7 +85,7 @@ class Moves:
         [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ROTATE_180]
     ]
 
-def pad_sequence(sequence):
+def pad_sequence(sequence: List[int]) -> List[int]:
     padded_sequence = sequence + [Keys.PAD] * (9 - len(sequence))
     return padded_sequence
 

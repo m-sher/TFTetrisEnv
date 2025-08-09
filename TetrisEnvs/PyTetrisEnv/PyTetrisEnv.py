@@ -8,11 +8,12 @@ from .Moves import Moves, Keys
 import numpy as np
 import random
 import copy
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 class PyTetrisEnv(py_environment.PyEnvironment):
 
-    def __init__(self, queue_size, max_holes, max_height, max_steps, seed, idx):
+    def __init__(self, queue_size: int, max_holes: Optional[int], max_height: int,
+                 max_steps: int, seed: Optional[int], idx: int) -> None:
 
         self._clear_reward = 0.5
         self._hole_penalty = -0.02
@@ -82,16 +83,16 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         print(f"Initialized Env {idx}", flush=True)
 
-    def action_spec(self):
+    def action_spec(self) -> array_spec.BoundedArraySpec:
         return self._action_spec
 
-    def observation_spec(self):
+    def observation_spec(self) -> Dict[str, array_spec.ArraySpec]:
         return self._observation_spec
 
-    def reward_spec(self):
+    def reward_spec(self) -> Dict[str, array_spec.ArraySpec]:
         return self._reward_spec
 
-    def _reset(self):
+    def _reset(self) -> ts.TimeStep:
 
         self._seed = self._seed + 1 if self._seed else None
 
@@ -121,7 +122,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return ts.restart(observation=observation,
                           reward_spec=self._reward_spec)
 
-    def _step(self, key_sequence):
+    def _step(self, key_sequence: np.ndarray) -> ts.TimeStep:
         """
         `_lock_piece` does not move piece to the bottom, and only tries
         locking at the current location. Action sequences all already end in
@@ -185,7 +186,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                                  reward=reward)
 
     def _execute_action(self, board: np.ndarray, active_piece: Piece, hold_piece: PieceType,
-                        queue: List[PieceType], key_sequence: np.ndarray) -> Tuple[bool, float, Piece, np.ndarray, List[PieceType]]:
+                        queue: List[PieceType], key_sequence: np.ndarray) -> Tuple[bool, int, float, np.ndarray, Piece, PieceType, List[PieceType]]:
         
         # Avoid modifying original state
         board = copy.deepcopy(board)
@@ -225,7 +226,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                      r=0,
                      cells=cells)
 
-    def _create_observation(self):
+    def _create_observation(self) -> Dict[str, np.ndarray]:
         pieces = [self._active_piece.piece_type, self._hold_piece] + self._queue
         pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
 
@@ -336,7 +337,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return can_hold, active_piece, hold_piece, queue
 
     def _lock_piece(self, active_piece: Piece,
-                    board: np.ndarray, queue: List[PieceType]) -> Tuple[bool, Piece, np.ndarray, List[PieceType]]:
+                    board: np.ndarray, queue: List[PieceType]) -> Tuple[int, bool, Piece, np.ndarray, List[PieceType]]:
         # DOES NOT MOVE PIECE TO THE BOTTOM
         # This method assumes the piece is already in a settled position.
         cell_coords = active_piece.cells + active_piece.loc
@@ -379,7 +380,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         holes = heights - np.sum(board, axis=0)
         return holes
 
-    def _get_skyline(self, heights: np.ndarray) -> int:
+    def _get_skyline(self, heights: np.ndarray) -> float:
         # Computes the difference between the hightest columns and lowest columns
         # For a board with width 10, the skyline is the difference between the
         # sum of the 4 highest columns and the sum of the next 4 highest columns
@@ -392,7 +393,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         bumpy = np.abs(heights[:-1] - heights[1:])
         return bumpy
 
-    def _board_stats(self, board: np.ndarray) -> Tuple[int, int, int]:
+    def _board_stats(self, board: np.ndarray) -> Tuple[float, float, float, float]:
         # Get total heights of the board
         heights = self._get_heights(board)
         heights_val = np.max(heights)

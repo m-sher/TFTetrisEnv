@@ -10,15 +10,15 @@ class Spins(Enum):
     T_SPIN_MINI = 1
     T_SPIN = 2
 
-class Scorer():
+class Scorer:
 
-    def __init__(self):
+    def __init__(self) -> None:
 
         self._b2b = 0
         self._combo = 0
         self._spin = Spins.NO_SPIN
         
-    def reset(self):
+    def reset(self) -> None:
         self._b2b = 0
         self._combo = 0
         self._spin = Spins.NO_SPIN

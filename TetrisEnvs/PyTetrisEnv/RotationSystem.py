@@ -1,9 +1,10 @@
 from .Pieces import PieceType, Piece
 import numpy as np
+from typing import Dict, Tuple, Optional
 
-class RotationSystem():
+class RotationSystem:
     
-    def __init__(self):
+    def __init__(self) -> None:
         
         self.orientations = {
             PieceType.I: np.array([
@@ -98,14 +99,12 @@ class RotationSystem():
         
         return False
         
-    def kick_piece(self, kick_table: dict[tuple[int, int], np.ndarray], piece: Piece,
-                   cells: np.ndarray, new_r: int, delta_r: int, board: np.ndarray):
+    def kick_piece(self, kick_table: Dict[Tuple[int, int], np.ndarray], piece: Piece,
+                   cells: np.ndarray, new_r: int, delta_r: int, board: np.ndarray) -> Tuple[bool, np.ndarray, np.ndarray, int, int, np.ndarray]:
         # Do I ever need to check this?
         if (piece.r, new_r) not in kick_table.keys():
-            # Rotation not possible, do nothing
-            piece.delta_r = 0
-            piece.delta_loc = np.zeros((2,), dtype=np.int32)
-            return
+            # Rotation not possible, raise error
+            raise ValueError(f"Rotation not possible from {piece.r} to {new_r}")
         
         kicked = False
         for delta_loc in kick_table[(piece.r, new_r)]:
