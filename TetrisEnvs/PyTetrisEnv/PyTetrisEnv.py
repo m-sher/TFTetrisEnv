@@ -21,12 +21,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         seed: Optional[int],
         idx: int,
     ) -> None:
-        self._clear_reward = 0.5
         self._hole_penalty = -0.02
         self._height_penalty = -0.01
         self._skyline_penalty = -0.02
         self._bumpy_penalty = -0.01
-        self._death_penalty = -100.0
+        self._death_penalty = -10.0
 
         self._max_holes = max_holes
         self._max_height = max_height
@@ -83,25 +82,20 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         )
 
         self._reward_spec = {
-            "attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack"),
-            "clear": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="clear_reward"
-            ),
-            "height_penalty": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="height_penalty"
-            ),
-            "hole_penalty": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="hole_penalty"
-            ),
-            "skyline_penalty": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="skyline_penalty"
-            ),
-            "bumpy_penalty": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="bumpy_penalty"
-            ),
-            "death_penalty": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="death_penalty"
-            ),
+            'attack': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='attack'),
+            'clear': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='clear'),
+            'height_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='height_penalty'),
+            'hole_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='hole_penalty'),
+            'skyline_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='skyline_penalty'),
+            'bumpy_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='bumpy_penalty'),
+            'death_penalty': array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name='death_penalty')
         }
 
         print(f"Initialized Env {idx}", flush=True)
@@ -154,7 +148,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
-        (top_out, clears, attack, board, active_piece, hold_piece, queue) = (
+        (top_out, clear, attack, board, active_piece, hold_piece, queue) = (
             self._execute_action(
                 self._board,
                 self._active_piece,
@@ -163,7 +157,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 key_sequence,
             )
         )
-        clear_reward = self._clear_reward * clears
 
         # Get board stats and compute supplementary rewards
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
@@ -202,13 +195,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._step_num += 1
 
         reward = {
-            "attack": np.array(attack),
-            "clear": np.array(clear_reward),
-            "height_penalty": np.array(height_penalty),
-            "hole_penalty": np.array(hole_penalty),
-            "skyline_penalty": np.array(skyline_penalty),
-            "bumpy_penalty": np.array(bumpy_penalty),
-            "death_penalty": np.array(death_penalty),
+            'attack': np.array(attack),
+            'clear': np.array(clear),
+            'height_penalty': np.array(height_penalty),
+            'hole_penalty': np.array(hole_penalty),
+            'skyline_penalty': np.array(skyline_penalty),
+            'bumpy_penalty': np.array(bumpy_penalty),
+            'death_penalty': np.array(death_penalty)
         }
 
         self._episode_ended = died or self._step_num >= self._max_steps
@@ -234,7 +227,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Convert action to key sequence
         # key_sequence = self._convert_to_keys(action)
-        clears = 0
+        clear = 0
         top_out = False
         next_piece = None
         attack = 0
@@ -249,13 +242,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 active_piece = self._try_key_vector(key_vector, active_piece, board)
 
                 if key == Keys.HARD_DROP:
-                    clears, top_out, next_piece, board, queue = self._lock_piece(
+                    clear, top_out, next_piece, board, queue = self._lock_piece(
                         active_piece, board, queue
                     )
 
-                attack = self._scorer.judge(active_piece, board, key, clears)
+                attack = self._scorer.judge(active_piece, board, key, clear)
 
-        return top_out, clears, attack, board, next_piece, hold_piece, queue
+        return top_out, clear, attack, board, next_piece, hold_piece, queue
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board
