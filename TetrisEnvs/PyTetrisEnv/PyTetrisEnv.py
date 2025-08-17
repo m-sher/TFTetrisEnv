@@ -20,6 +20,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         max_steps: int,
         seed: Optional[int],
         idx: int,
+        garbage_chance: float = 0.0,
+        garbage_min: int = 0,
+        garbage_max: int = 0,
     ) -> None:
         self._hole_penalty = -0.02
         self._height_penalty = -0.01
@@ -30,6 +33,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_holes = max_holes
         self._max_height = max_height
         self._max_steps = max_steps
+
+        # Garbage system parameters
+        self._garbage_chance = garbage_chance
+        self._garbage_min = garbage_min
+        self._garbage_max = garbage_max
 
         self._seed = seed
 
@@ -176,7 +184,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             holes_val > self._max_holes if self._max_holes is not None else False
         )
 
-        died = top_out or exceeded_holes
+        # Add garbage after actions are executed
+        board = self._add_garbage(board)
+
+        # Check for top-out caused by garbage
+        garbage_top_out = np.any(board[: 24 - self._max_height] != 0.0)
+
+        died = top_out or exceeded_holes or garbage_top_out
 
         death_penalty = self._death_penalty if died else 0.0
 
@@ -228,8 +242,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         hold_piece = copy.deepcopy(hold_piece)
         queue = copy.deepcopy(queue)
 
-        # Convert action to key sequence
-        # key_sequence = self._convert_to_keys(action)
         clear = 0
         top_out = False
         next_piece = None
@@ -429,6 +441,41 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 board[0] = 0.0
                 board[1 : i + 1] = board[:i]
         return board, clears
+
+    def _add_garbage(self, board: np.ndarray) -> np.ndarray:
+        """
+        Add clean garbage to the bottom of the board.
+        Clean garbage consists of rows filled with 1.0 except for one random empty column.
+        """
+        if self._garbage_chance <= 0.0 or self._garbage_max <= 0:
+            return board
+
+        # Check if garbage should be added this step
+        if self._random.random() > self._garbage_chance:
+            return board
+
+        # Determine number of garbage rows to add
+        if self._garbage_min == self._garbage_max:
+            num_garbage_rows = self._garbage_min
+        else:
+            num_garbage_rows = self._random.randint(
+                self._garbage_min, self._garbage_max
+            )
+
+        if num_garbage_rows <= 0:
+            return board
+
+        # Create garbage rows
+        garbage_rows = np.ones((num_garbage_rows, 10), dtype=np.float32)
+
+        # Make one random column empty
+        empty_column = self._random.randint(0, 9)
+        garbage_rows[:, empty_column] = 0.0
+
+        # Shift existing board up and add garbage at the bottom
+        board = np.concatenate([board[num_garbage_rows:], garbage_rows], axis=0)
+
+        return board
 
     def _get_heights(self, board: np.ndarray) -> np.ndarray:
         # Get heights of each column in the board
