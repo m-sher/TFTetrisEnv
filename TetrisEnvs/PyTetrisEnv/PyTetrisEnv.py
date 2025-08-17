@@ -82,20 +82,23 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         )
 
         self._reward_spec = {
-            'attack': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='attack'),
-            'clear': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='clear'),
-            'height_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='height_penalty'),
-            'hole_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='hole_penalty'),
-            'skyline_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='skyline_penalty'),
-            'bumpy_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='bumpy_penalty'),
-            'death_penalty': array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name='death_penalty')
+            "attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack"),
+            "clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="clear"),
+            "height_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="height_penalty"
+            ),
+            "hole_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="hole_penalty"
+            ),
+            "skyline_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="skyline_penalty"
+            ),
+            "bumpy_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="bumpy_penalty"
+            ),
+            "death_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="death_penalty"
+            ),
         }
 
         print(f"Initialized Env {idx}", flush=True)
@@ -195,13 +198,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._step_num += 1
 
         reward = {
-            'attack': np.array(attack),
-            'clear': np.array(clear),
-            'height_penalty': np.array(height_penalty),
-            'hole_penalty': np.array(hole_penalty),
-            'skyline_penalty': np.array(skyline_penalty),
-            'bumpy_penalty': np.array(bumpy_penalty),
-            'death_penalty': np.array(death_penalty)
+            "attack": np.array(attack),
+            "clear": np.array(clear),
+            "height_penalty": np.array(height_penalty),
+            "hole_penalty": np.array(hole_penalty),
+            "skyline_penalty": np.array(skyline_penalty),
+            "bumpy_penalty": np.array(bumpy_penalty),
+            "death_penalty": np.array(death_penalty),
         }
 
         self._episode_ended = died or self._step_num >= self._max_steps
