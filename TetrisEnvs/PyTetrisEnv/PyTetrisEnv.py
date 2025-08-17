@@ -34,7 +34,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_height = max_height
         self._max_steps = max_steps
 
-        # Garbage system parameters
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
         self._garbage_max = garbage_max
@@ -443,18 +442,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return board, clears
 
     def _add_garbage(self, board: np.ndarray) -> np.ndarray:
-        """
-        Add clean garbage to the bottom of the board.
-        Clean garbage consists of rows filled with 1.0 except for one random empty column.
-        """
+        # Add clean garbage to the bottom of the board.
         if self._garbage_chance <= 0.0 or self._garbage_max <= 0:
             return board
 
-        # Check if garbage should be added this step
         if self._random.random() > self._garbage_chance:
             return board
 
-        # Determine number of garbage rows to add
         if self._garbage_min == self._garbage_max:
             num_garbage_rows = self._garbage_min
         else:
@@ -465,14 +459,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if num_garbage_rows <= 0:
             return board
 
-        # Create garbage rows
         garbage_rows = np.ones((num_garbage_rows, 10), dtype=np.float32)
 
-        # Make one random column empty
         empty_column = self._random.randint(0, 9)
         garbage_rows[:, empty_column] = 0.0
 
-        # Shift existing board up and add garbage at the bottom
         board = np.concatenate([board[num_garbage_rows:], garbage_rows], axis=0)
 
         return board

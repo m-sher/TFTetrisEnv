@@ -17,6 +17,10 @@ class PyTetrisRunner:
         key_dim: int,
         num_steps: int,
         num_envs: int,
+        garbage_chance_min: float,
+        garbage_chance_max: float,
+        garbage_rows_min: int,
+        garbage_rows_max: int,
         p_model: Any,
         v_model: Any,
         seed: int = 123,
@@ -30,6 +34,12 @@ class PyTetrisRunner:
         self.p_model = p_model
         self.v_model = v_model
 
+        garbage_chances = [
+            garbage_chance_min
+            + (garbage_chance_max - garbage_chance_min) * i / (num_envs - 1)
+            for i in range(num_envs)
+        ]
+
         constructors = [
             lambda idx=i: PyTetrisEnv(
                 queue_size=queue_size,
@@ -38,6 +48,9 @@ class PyTetrisRunner:
                 max_steps=max_steps,
                 seed=seed,
                 idx=idx,
+                garbage_chance=garbage_chances[idx],
+                garbage_min=garbage_rows_min,
+                garbage_max=garbage_rows_max,
             )
             for i in range(num_envs)
         ]
