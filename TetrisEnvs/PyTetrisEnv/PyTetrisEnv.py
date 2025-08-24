@@ -201,6 +201,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._hold_piece = hold_piece
         self._queue = queue
 
+        # Compute post-garbage supplementary values
+        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
+
         self._last_heights = heights_val
         self._last_holes = holes_val
         self._last_skyline = skyline_val
