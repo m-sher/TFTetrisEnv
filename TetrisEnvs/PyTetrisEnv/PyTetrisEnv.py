@@ -24,8 +24,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_min: int = 0,
         garbage_max: int = 0,
     ) -> None:
-        self._hole_penalty = -0.02
-        self._height_penalty = -0.01
+        self._hole_penalty = -0.04
+        self._height_penalty = -0.02
         self._skyline_penalty = -0.02
         self._bumpy_penalty = -0.01
         self._death_penalty = -10.0
