@@ -213,7 +213,9 @@ class PyTetrisRunner:
                 screen.blit(board_surf, (0, 0))
                 pygame.display.update()
 
-            key_sequence, log_probs, masks, _ = self.p_model.predict((board, pieces, b2b_combo))
+            key_sequence, log_probs, masks, _ = self.p_model.predict(
+                (board, pieces, b2b_combo)
+            )
             values = self.v_model.predict((board, pieces, b2b_combo))
 
             time_step = self.env.step(key_sequence)

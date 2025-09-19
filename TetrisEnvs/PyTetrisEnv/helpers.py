@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def overlaps(cells: np.ndarray, loc: np.ndarray, board: np.ndarray) -> bool:
     cell_coords = cells + loc
     rows, cols = cell_coords.T

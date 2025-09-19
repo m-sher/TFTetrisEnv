@@ -1,6 +1,5 @@
 from enum import Enum
 from .Pieces import Piece, PieceType
-from .Moves import Keys
 from .helpers import overlaps
 import numpy as np
 
@@ -89,7 +88,9 @@ class Scorer:
                     spin = Spins.NO_SPIN
             else:
                 for direction in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                    if not overlaps(cells=piece.cells, loc=piece.loc + direction, board=board):
+                    if not overlaps(
+                        cells=piece.cells, loc=piece.loc + direction, board=board
+                    ):
                         spin = Spins.NO_SPIN
                         break
                 else:
@@ -125,7 +126,7 @@ class Scorer:
             # Compute b2b and combo bonuses
             if self._b2b > -1:
                 attack += 1
-            
+
             if self._combo > 0:
                 if attack > 0:
                     attack = np.floor(attack * (1 + 0.25 * self._combo))
