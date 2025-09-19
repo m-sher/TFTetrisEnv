@@ -12,6 +12,7 @@ class PieceType(Enum):
     S = 5
     T = 6
     Z = 7
+    G = 8  # Garbage
 
 
 class Piece:

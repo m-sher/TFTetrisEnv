@@ -1,4 +1,5 @@
 from .Pieces import PieceType, Piece
+from .helpers import overlaps
 import numpy as np
 from typing import Dict, Tuple
 
@@ -151,22 +152,6 @@ class RotationSystem:
             ),  # L -> R
         }
 
-    def overlaps(self, cells: np.ndarray, loc: np.ndarray, board: np.ndarray) -> bool:
-        cell_coords = cells + loc
-        rows, cols = cell_coords.T
-
-        # Outside board vertically
-        if np.any(rows < 0) or np.any(rows > board.shape[0] - 1):
-            return True
-        # Outside board horizontally
-        if np.any(cols < 0) or np.any(cols > board.shape[1] - 1):
-            return True
-        # Overlaps occupied cell
-        if np.any(board[rows, cols] != 0):
-            return True
-
-        return False
-
     def kick_piece(
         self,
         kick_table: Dict[Tuple[int, int], np.ndarray],
@@ -184,7 +169,7 @@ class RotationSystem:
         kicked = False
         for delta_loc in kick_table[(piece.r, new_r)]:
             # Check each kick and perform the first valid
-            if not self.overlaps(cells=cells, loc=piece.loc + delta_loc, board=board):
+            if not overlaps(cells=cells, loc=piece.loc + delta_loc, board=board):
                 # Kick doesn't overlap, so apply it and break
                 piece.r = new_r
                 piece.delta_r = delta_r

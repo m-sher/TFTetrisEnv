@@ -5,6 +5,7 @@ from .RotationSystem import RotationSystem
 from .Scorer import Scorer
 from .Pieces import Piece, PieceType
 from .Moves import Moves, Keys
+from .helpers import overlaps
 import numpy as np
 import random
 import copy
@@ -17,13 +18,15 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         queue_size: int,
         max_holes: Optional[int],
         max_height: int,
-        max_steps: int,
+        max_steps: Optional[int],
         seed: Optional[int],
         idx: int,
         garbage_chance: float = 0.0,
         garbage_min: int = 0,
         garbage_max: int = 0,
     ) -> None:
+        self._b2b_reward = 1.0
+        self._combo_reward = 0.25
         self._hole_penalty = -0.04
         self._height_penalty = -0.02
         self._skyline_penalty = -0.02
@@ -43,6 +46,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._random = random.Random(seed)
 
         self._board = np.zeros((24, 10), dtype=np.float32)
+        self._vis_board = np.zeros((24, 10), dtype=np.int32)
 
         self._rotation_system = RotationSystem()
 
@@ -54,16 +58,25 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
+        self._last_b2b = -1
+        self._last_combo = -1
 
         self._hold_piece = PieceType.N
 
         self._queue_size = queue_size
-        self._valid_pieces = [piece for piece in PieceType if piece is not PieceType.N]
+        self._valid_pieces = [
+            piece
+            for piece in PieceType
+            if piece is not PieceType.N and piece is not PieceType.G
+        ]
         self._next_bag = self._random.sample(
             self._valid_pieces, len(self._valid_pieces)
         )
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
+        
+        # Initialize garbage queue - stores tuples of (num_rows, empty_column)
+        self._garbage_queue: List[Tuple[int, int]] = []
 
         self._episode_ended = False
 
@@ -75,6 +88,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 maximum=1.0,
                 name="board",
             ),
+            "vis_board": array_spec.BoundedArraySpec(
+                shape=(24, 10, 1),
+                dtype=np.int32,
+                minimum=0.0,
+                maximum=8.0,
+                name="vis_board",
+            ),
             "pieces": array_spec.BoundedArraySpec(
                 shape=(2 + queue_size,),
                 dtype=np.int64,
@@ -82,6 +102,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 maximum=7,
                 name="pieces",
             ),
+            "b2b_combo": array_spec.ArraySpec(shape=(2,), dtype=np.float32, name="b2b_combo"),
         }
 
         self._action_spec = array_spec.BoundedArraySpec(
@@ -91,6 +112,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._reward_spec = {
             "attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack"),
             "clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="clear"),
+            "b2b_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="b2b_reward"),
+            "combo_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="combo_reward"),
             "height_penalty": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="height_penalty"
             ),
@@ -120,11 +143,12 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return self._reward_spec
 
     def _reset(self) -> ts.TimeStep:
-        self._seed = self._seed + 1 if self._seed else None
+        self._seed = (self._seed + 1) if self._seed else None
 
         self._random = random.Random(self._seed)
 
         self._board[:] = 0.0
+        self._vis_board[:] = 0
 
         self._scorer.reset()
 
@@ -134,6 +158,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._last_holes = 0
         self._last_skyline = 0
         self._last_bumpy = 0
+        self._last_b2b = -1
+        self._last_combo = -1
 
         self._hold_piece = PieceType.N
 
@@ -142,6 +168,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         )
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
+        
+        # Reset garbage queue
+        self._garbage_queue = []
 
         self._episode_ended = False
 
@@ -158,9 +187,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
-        (top_out, clear, attack, board, active_piece, hold_piece, queue) = (
+        (top_out, clear, attack, board, vis_board, active_piece, hold_piece, queue) = (
             self._execute_action(
                 self._board,
+                self._vis_board,
                 self._active_piece,
                 self._hold_piece,
                 self._queue,
@@ -168,23 +198,40 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             )
         )
 
+        if attack > 0:
+            self._remove_attack_from_garbage_queue(attack)
+        
+        if clear == 0:  # No lines were cleared
+            board, vis_board = self._push_garbage_to_board(board, vis_board)
+        
+        # 4. Check if new garbage should be added to queue
+        self._add_to_garbage_queue()
+
+        b2b_val = self._scorer._b2b
+        combo_val = self._scorer._combo
+
+        # Avoid over-penalizing surge attacks
+        b2b_delta = b2b_val - self._last_b2b
+        if b2b_delta <= -4:
+            b2b_delta *= 0.5
+        b2b_reward = self._b2b_reward * b2b_delta
+
+        combo_reward = self._combo_reward * (combo_val - self._last_combo)
+
         # Get board stats and compute supplementary rewards
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
         height_penalty = (
-            self._height_penalty * (heights_val - self._last_heights) * heights_val
+            self._height_penalty * (heights_val - self._last_heights)
         )
-        hole_penalty = self._hole_penalty * (holes_val - self._last_holes) * holes_val
+        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
         skyline_penalty = (
-            self._skyline_penalty * (skyline_val - self._last_skyline) * skyline_val
+            self._skyline_penalty * (skyline_val - self._last_skyline)
         )
-        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy) * bumpy_val
+        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
 
         exceeded_holes = (
             holes_val > self._max_holes if self._max_holes is not None else False
         )
-
-        # Add garbage after actions are executed
-        board = self._add_garbage(board)
 
         # Check for top-out caused by garbage
         garbage_top_out = np.any(board[: 24 - self._max_height] != 0.0)
@@ -197,17 +244,17 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Update state
         self._board = board
+        self._vis_board = vis_board
         self._active_piece = active_piece
         self._hold_piece = hold_piece
         self._queue = queue
-
-        # Compute post-garbage supplementary values
-        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
 
         self._last_heights = heights_val
         self._last_holes = holes_val
         self._last_skyline = skyline_val
         self._last_bumpy = bumpy_val
+        self._last_b2b = b2b_val
+        self._last_combo = combo_val
 
         observation = self._create_observation()
 
@@ -216,6 +263,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         reward = {
             "attack": np.array(attack),
             "clear": np.array(clear),
+            "b2b_reward": np.array(b2b_reward),
+            "combo_reward": np.array(combo_reward),
             "height_penalty": np.array(height_penalty),
             "hole_penalty": np.array(hole_penalty),
             "skyline_penalty": np.array(skyline_penalty),
@@ -223,7 +272,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "death_penalty": np.array(death_penalty),
         }
 
-        self._episode_ended = died or self._step_num >= self._max_steps
+        self._episode_ended = died or (
+            False if not self._max_steps else self._step_num >= self._max_steps
+        )
 
         if self._episode_ended:
             return ts.termination(observation=observation, reward=reward)
@@ -233,6 +284,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _execute_action(
         self,
         board: np.ndarray,
+        vis_board: np.ndarray,
         active_piece: Piece,
         hold_piece: PieceType,
         queue: List[PieceType],
@@ -259,13 +311,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 active_piece = self._try_key_vector(key_vector, active_piece, board)
 
                 if key == Keys.HARD_DROP:
-                    clear, top_out, next_piece, board, queue = self._lock_piece(
-                        active_piece, board, queue
+                    clear, top_out, next_piece, next_board, next_vis_board, queue = (
+                        self._lock_piece(active_piece, board, vis_board, queue)
                     )
 
-                attack = self._scorer.judge(active_piece, board, key, clear)
+                    attack = self._scorer.judge(active_piece, board, clear)
 
-        return top_out, clear, attack, board, next_piece, hold_piece, queue
+        return top_out, clear, attack, next_board, next_vis_board, next_piece, hold_piece, queue
 
     def _spawn_piece(self, piece_type: PieceType) -> Piece:
         # All pieces spawn 3 cells from the left on a default board
@@ -278,8 +330,14 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _create_observation(self) -> Dict[str, np.ndarray]:
         pieces = [self._active_piece.piece_type, self._hold_piece] + self._queue
         pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
+        stats = np.array([self._scorer._b2b, self._scorer._combo], dtype=np.float32)
 
-        observation = {"board": self._board[..., None], "pieces": pieces}
+        observation = {
+            "board": self._board[..., None],
+            "vis_board": self._vis_board[..., None],
+            "pieces": pieces,
+            "b2b_combo": stats
+        }
 
         return observation
 
@@ -297,13 +355,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     ) -> Piece:
         # Key vector is delta [row, column, rotation]
 
-        delta_loc = key_vector[:-1]
-        delta_r = key_vector[-1]
+        try_delta_loc = key_vector[:-1]
+        try_delta_r = key_vector[-1]
 
-        if delta_r:
-            active_piece = self._rotate(delta_r, active_piece=active_piece, board=board)
+        if try_delta_r:
+            active_piece = self._rotate(try_delta_r, active_piece=active_piece, board=board)
         else:
-            active_piece = self._move(delta_loc, active_piece=active_piece, board=board)
+            active_piece = self._move(try_delta_loc, active_piece=active_piece, board=board)
 
         return active_piece
 
@@ -313,7 +371,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         new_r = (active_piece.r + try_delta_r) % 4
         cells = self._rotation_system.orientations[active_piece.piece_type][new_r]
 
-        if not self._rotation_system.overlaps(
+        if not overlaps(
             cells=cells, loc=active_piece.loc, board=board
         ):
             # Applying rotation doesn't overlap, so do it
@@ -348,7 +406,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             # Try moving the full amount, stop at first collision
             for delta_y in range(0, try_delta_loc[0] + direction, direction):
                 new_delta_loc = np.array([delta_y, 0], dtype=np.int32)
-                if self._rotation_system.overlaps(
+                if overlaps(
                     cells=active_piece.cells,
                     loc=active_piece.loc + new_delta_loc,
                     board=board,
@@ -366,7 +424,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             # Try moving the full amount, stop at first collision
             for delta_x in range(0, try_delta_loc[1] + direction, direction):
                 new_delta_loc = np.array([0, delta_x], dtype=np.int32)
-                if self._rotation_system.overlaps(
+                if overlaps(
                     cells=active_piece.cells,
                     loc=active_piece.loc + new_delta_loc,
                     board=board,
@@ -381,7 +439,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         active_piece.loc += delta_loc
         active_piece.delta_loc = delta_loc
-        active_piece.delta_r = 0
+
+        if np.any(delta_loc != 0):
+            active_piece.delta_r = 0
 
         return active_piece
 
@@ -410,21 +470,29 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return can_hold, active_piece, hold_piece, queue
 
     def _lock_piece(
-        self, active_piece: Piece, board: np.ndarray, queue: List[PieceType]
-    ) -> Tuple[int, bool, Piece, np.ndarray, List[PieceType]]:
+        self,
+        active_piece: Piece,
+        board: np.ndarray,
+        vis_board: np.ndarray,
+        queue: List[PieceType],
+    ) -> Tuple[int, bool, Piece, np.ndarray, np.ndarray, List[PieceType]]:
         # DOES NOT MOVE PIECE TO THE BOTTOM
         # This method assumes the piece is already in a settled position.
+        board = copy.deepcopy(board)
+        vis_board = copy.deepcopy(vis_board)
+        
         cell_coords = active_piece.cells + active_piece.loc
 
         board[cell_coords[:, 0], cell_coords[:, 1]] = 1.0
+        vis_board[cell_coords[:, 0], cell_coords[:, 1]] = active_piece.piece_type.value
 
-        board, clears = self._clear_lines(board)
+        board, vis_board, clears = self._clear_lines(board, vis_board)
 
         active_piece = self._spawn_piece(queue.pop(0))
 
         top_out = np.any(board[: 24 - self._max_height] != 0.0)
 
-        return clears, top_out, active_piece, board, queue
+        return clears, top_out, active_piece, board, vis_board, queue
 
     def _fill_queue(self, queue: List[PieceType]) -> List[PieceType]:
         while len(queue) < self._queue_size:
@@ -435,22 +503,27 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 )
         return queue
 
-    def _clear_lines(self, board: np.ndarray) -> Tuple[np.ndarray, int]:
+    def _clear_lines(
+        self, board: np.ndarray, vis_board: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, int]:
         clears = 0
         for i, row in enumerate(board):
             if np.all(row != 0.0):
                 clears += 1
                 board[0] = 0.0
                 board[1 : i + 1] = board[:i]
-        return board, clears
 
-    def _add_garbage(self, board: np.ndarray) -> np.ndarray:
-        # Add clean garbage to the bottom of the board.
+                vis_board[0] = 0
+                vis_board[1 : i + 1] = vis_board[:i]
+        return board, vis_board, clears
+
+    def _add_to_garbage_queue(self) -> None:
+        """Generate garbage and add it to the garbage queue based on chance."""
         if self._garbage_chance <= 0.0 or self._garbage_max <= 0:
-            return board
+            return
 
         if self._random.random() > self._garbage_chance:
-            return board
+            return
 
         if self._garbage_min == self._garbage_max:
             num_garbage_rows = self._garbage_min
@@ -460,16 +533,47 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             )
 
         if num_garbage_rows <= 0:
-            return board
-
-        garbage_rows = np.ones((num_garbage_rows, 10), dtype=np.float32)
+            return
 
         empty_column = self._random.randint(0, 9)
+        
+        # Add garbage instance to queue instead of immediately to board
+        self._garbage_queue.append((num_garbage_rows, empty_column))
+
+    def _push_garbage_to_board(
+        self, board: np.ndarray, vis_board: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Push the next garbage from the queue to the board."""
+        if not self._garbage_queue:
+            return board, vis_board
+            
+        num_garbage_rows, empty_column = self._garbage_queue.pop(0)
+
+        garbage_rows = np.ones((num_garbage_rows, 10), dtype=np.float32)
         garbage_rows[:, empty_column] = 0.0
 
         board = np.concatenate([board[num_garbage_rows:], garbage_rows], axis=0)
+        vis_board = np.concatenate(
+            [vis_board[num_garbage_rows:], garbage_rows * PieceType.G.value], axis=0
+        ).astype(np.int32)
 
-        return board
+        return board, vis_board
+        
+    def _remove_attack_from_garbage_queue(self, attack_amount: float) -> None:
+        """Remove garbage from queue based on attack sent."""
+        lines_to_remove = int(attack_amount)
+        
+        while lines_to_remove > 0 and self._garbage_queue:
+            num_rows, empty_column = self._garbage_queue[0]
+            
+            if num_rows <= lines_to_remove:
+                # Remove entire garbage instance
+                lines_to_remove -= num_rows
+                self._garbage_queue.pop(0)
+            else:
+                # Partially reduce garbage instance
+                self._garbage_queue[0] = (num_rows - lines_to_remove, empty_column)
+                lines_to_remove = 0
 
     def _get_heights(self, board: np.ndarray) -> np.ndarray:
         # Get heights of each column in the board

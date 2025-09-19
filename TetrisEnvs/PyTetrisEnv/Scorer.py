@@ -1,6 +1,7 @@
 from enum import Enum
 from .Pieces import Piece, PieceType
 from .Moves import Keys
+from .helpers import overlaps
 import numpy as np
 
 
@@ -10,27 +11,27 @@ class Spins(Enum):
     NO_SPIN = 0
     T_SPIN_MINI = 1
     T_SPIN = 2
+    ALL_MINI = 3
 
 
 class Scorer:
     def __init__(self) -> None:
-        self._b2b = 0
-        self._combo = 0
-        self._spin = Spins.NO_SPIN
+        self._b2b = -1
+        self._combo = -1
 
     def reset(self) -> None:
-        self._b2b = 0
-        self._combo = 0
-        self._spin = Spins.NO_SPIN
+        self._b2b = -1
+        self._combo = -1
 
-    def judge(self, piece: Piece, board: np.ndarray, key: int, clears: int) -> float:
-        # TODO
-        # all-mini+ immobile spin detection
-
+    def judge(self, piece: Piece, board: np.ndarray, clears: int) -> float:
         attack = 0
+        spin = Spins.NO_SPIN
+        surge = 0
+        new_b2b = self._b2b
+        new_combo = self._combo
 
-        if piece.piece_type == PieceType.T:
-            if piece.delta_r != 0:
+        if piece.delta_r != 0:
+            if piece.piece_type == PieceType.T:
                 # Check for corners clockwise from top-left
                 # Corners are filled if cell is nonzero or out of board
                 corner_cells = np.array(
@@ -74,50 +75,70 @@ class Scorer:
 
                 if front_corners == 2 and back_corners >= 1:
                     # Proper T spin
-                    self._spin = Spins.T_SPIN
+                    spin = Spins.T_SPIN
 
                 elif front_corners == 1 and back_corners == 2:
                     if np.sum(np.abs(piece.delta_loc)) > 2:
                         # Piece was kicked far enough, so this is also a T spin
-                        self._spin = Spins.T_SPIN
+                        spin = Spins.T_SPIN
                     else:
                         # Not kicked far, T spin mini
-                        self._spin = Spins.T_SPIN_MINI
+                        spin = Spins.T_SPIN_MINI
                 else:
                     # Fails to pass corner rules, not a T spin
-                    self._spin = Spins.NO_SPIN
-            elif np.any(piece.delta_loc != 0) or key == Keys.HOLD:
-                # Remove any active spins on HOLD or if movement
-                # is caused by anything other than a kick
-                self._spin = Spins.NO_SPIN
-
-        if key == Keys.HARD_DROP:
-            perfect_clear = np.all(board == 0)
-
-            if clears:
-                if self._spin != Spins.NO_SPIN or clears == 4 or perfect_clear:
-                    self._b2b += 1
-                else:
-                    self._b2b = 0
-
-                # TODO
-                # Combo table for tetrio
-                self._combo += 1
+                    spin = Spins.NO_SPIN
             else:
-                self._combo = 0
+                for direction in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                    if not overlaps(cells=piece.cells, loc=piece.loc + direction, board=board):
+                        spin = Spins.NO_SPIN
+                        break
+                else:
+                    spin = Spins.ALL_MINI
 
+        perfect_clear = np.all(board == 0)
+
+        if clears:
+            if spin != Spins.NO_SPIN or clears == 4 or perfect_clear:
+                new_b2b += 1
+            else:
+                # Compute surge
+                if self._b2b >= 4:
+                    surge = new_b2b
+
+                new_b2b = -1
+
+            new_combo += 1
+
+            # Compute base attack
             if perfect_clear:
                 attack += [0, 5, 6, 7, 9][clears]
 
-            elif self._spin == Spins.T_SPIN:
+            elif spin == Spins.T_SPIN:
                 attack += [0, 2, 4, 6, 0][clears]
 
-            elif self._spin == Spins.T_SPIN_MINI:
+            elif spin == Spins.T_SPIN_MINI:
                 attack += [0, 0, 1, 2, 0][clears]
 
             else:
                 attack += [0, 0, 1, 2, 4][clears]
 
-            self._spin = Spins.NO_SPIN
+            # Compute b2b and combo bonuses
+            if self._b2b > -1:
+                attack += 1
+            
+            if self._combo > 0:
+                if attack > 0:
+                    attack = np.floor(attack * (1 + 0.25 * self._combo))
+                else:
+                    attack = np.floor(np.log(1 + 1.25 * self._combo))
+
+            # Send surge
+            attack += surge
+
+        else:
+            new_combo = -1
+
+        self._b2b = new_b2b
+        self._combo = new_combo
 
         return attack
