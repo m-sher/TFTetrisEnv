@@ -218,7 +218,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Avoid over-penalizing surge attacks
         b2b_delta = b2b_val - self._last_b2b
-        if b2b_delta <= -4:
+        if b2b_delta <= -5:
             b2b_delta *= 0.5
         b2b_reward = self._b2b_reward * b2b_delta
 
