@@ -25,7 +25,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_min: int = 0,
         garbage_max: int = 0,
     ) -> None:
-        self._b2b_reward = 1.0
+        self._b2b_reward = 2.0
         self._combo_reward = 0.25
         self._hole_penalty = -0.04
         self._height_penalty = -0.02

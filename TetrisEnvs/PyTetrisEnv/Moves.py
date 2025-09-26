@@ -78,11 +78,43 @@ class Moves:
         [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
         [Keys.SOFT_DROP, Keys.CLOCKWISE, Keys.ROTATE_180],
         [Keys.SOFT_DROP, Keys.ANTICLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.CLOCKWISE, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.CLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_RIGHT, Keys.ANTICLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.CLOCKWISE, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.CLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.TAP_LEFT, Keys.ANTICLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.CLOCKWISE, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.CLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_RIGHT, Keys.ANTICLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.CLOCKWISE, Keys.CLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.ANTICLOCKWISE, Keys.ANTICLOCKWISE],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.CLOCKWISE, Keys.ROTATE_180],
+        [Keys.SOFT_DROP, Keys.DAS_LEFT, Keys.ANTICLOCKWISE, Keys.ROTATE_180],
     ]
 
 
 def pad_sequence(sequence: List[int]) -> List[int]:
-    padded_sequence = sequence + [Keys.PAD] * (9 - len(sequence))
+    padded_sequence = sequence + [Keys.PAD] * (15 - len(sequence))
     return padded_sequence
 
 
