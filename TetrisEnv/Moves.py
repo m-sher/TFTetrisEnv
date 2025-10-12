@@ -1,3 +1,4 @@
+import tensorflow as tf
 import numpy as np
 from typing import List
 
@@ -158,3 +159,5 @@ class Convert:
         ],
         dtype=np.int32,
     )
+
+    tf_to_sequence = tf.cast(to_sequence, tf.int64)

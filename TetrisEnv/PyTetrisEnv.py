@@ -25,7 +25,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_min: int = 0,
         garbage_max: int = 0,
     ) -> None:
-        self._b2b_reward = 2.0
+        self._b2b_reward = 1.0
         self._combo_reward = 0.25
         self._hole_penalty = -0.04
         self._height_penalty = -0.02
@@ -204,13 +204,20 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             )
         )
 
+        # Get board stats and compute supplementary rewards BEFORE garbage
+        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
+        height_penalty = self._height_penalty * (heights_val - self._last_heights)
+        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
+        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
+        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
+
         if attack > 0:
             self._remove_attack_from_garbage_queue(attack)
 
         if clear == 0:  # No lines were cleared
             board, vis_board = self._push_garbage_to_board(board, vis_board)
 
-        # 4. Check if new garbage should be added to queue
+        # Check if new garbage should be added to queue
         self._add_to_garbage_queue()
 
         b2b_val = self._scorer._b2b
@@ -224,12 +231,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         combo_reward = self._combo_reward * (combo_val - self._last_combo)
 
-        # Get board stats and compute supplementary rewards
+        # Get board stats AFTER garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
-        height_penalty = self._height_penalty * (heights_val - self._last_heights)
-        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
-        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
-        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
 
         exceeded_holes = (
             holes_val > self._max_holes if self._max_holes is not None else False
