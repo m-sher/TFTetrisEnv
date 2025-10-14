@@ -3,6 +3,7 @@ TensorFlow environment for RL with Tetris SRS+
 
 ## Todo
 - Add usage to this README
+- Update to pyproject.toml
 - Move runner to QTris repo
 
 ### Done
