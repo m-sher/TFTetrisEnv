@@ -24,6 +24,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_chance: float = 0.0,
         garbage_min: int = 0,
         garbage_max: int = 0,
+        gamma: float = 0.99
     ) -> None:
         self._b2b_reward = 1.0
         self._combo_reward = 0.25
@@ -40,6 +41,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
         self._garbage_max = garbage_max
+
+        self._gamma = gamma
 
         self._seed = seed
 
@@ -184,6 +187,12 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         return ts.restart(observation=observation, reward_spec=self._reward_spec)
 
+    def _compute_potential(self, new_value: float, old_value: float) -> float:
+        new_signed_square = new_value * abs(new_value)
+        old_signed_square = old_value * abs(old_value)
+
+        return (self._gamma * new_signed_square) - old_signed_square
+
     def _step(self, key_sequence: np.ndarray) -> ts.TimeStep:
         """
         `_lock_piece` does not move piece to the bottom, and only tries
@@ -206,10 +215,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Get board stats and compute supplementary rewards BEFORE garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
-        height_penalty = self._height_penalty * (heights_val - self._last_heights)
-        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
-        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
-        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
+        height_penalty = self._height_penalty * self._compute_potential(heights_val, self._last_heights)
+        hole_penalty = self._hole_penalty * self._compute_potential(holes_val, self._last_holes)
+        skyline_penalty = self._skyline_penalty * self._compute_potential(skyline_val, self._last_skyline)
+        bumpy_penalty = self._bumpy_penalty * self._compute_potential(bumpy_val, self._last_bumpy)
 
         if attack > 0:
             self._remove_attack_from_garbage_queue(attack)
@@ -223,13 +232,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         b2b_val = self._scorer._b2b
         combo_val = self._scorer._combo
 
-        # Avoid over-penalizing surge attacks
-        b2b_delta = b2b_val - self._last_b2b
-        if b2b_delta <= -5:
-            b2b_delta *= 0.5
-        b2b_reward = self._b2b_reward * b2b_delta
+        b2b_reward = self._b2b_reward * self._compute_potential(b2b_val, self._last_b2b)
 
-        combo_reward = self._combo_reward * (combo_val - self._last_combo)
+        combo_reward = self._combo_reward * self._compute_potential(combo_val, self._last_combo)
 
         # Get board stats AFTER garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
