@@ -2,13 +2,13 @@
 TensorFlow environment for RL with Tetris SRS+
 
 ## Todo
-- Undo for debugging
-- More spins
-	- Immobile detection for all-mini+
-- Combo table
-- Everything else :)
+- Add usage to this README
+- Update to pyproject.toml
+- Move runner to QTris repo
 
 ### Done
+- ~~Combo table~~
+- ~~Immobile detection for all-mini+~~
 - ~~Convert methods to return updated state attributes instead of directly updating them for debugging~~
 - ~~Simple supplemental scoring~~
 - ~~Standard scoring~~
