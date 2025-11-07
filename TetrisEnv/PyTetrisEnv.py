@@ -28,8 +28,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     ) -> None:
         self._b2b_reward = 1.0
         self._combo_reward = 0.25
-        self._hole_penalty = -0.04
-        self._height_penalty = -0.02
+        self._spin_reward = 1.0
+        self._hole_penalty = -0.1
+        self._height_penalty = -0.05
         self._skyline_penalty = -0.02
         self._bumpy_penalty = -0.01
         self._death_penalty = -100.0
@@ -123,6 +124,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "combo_reward": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="combo_reward"
             ),
+            "spin_reward": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="spin_reward"
+            ),
             "height_penalty": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="height_penalty"
             ),
@@ -188,8 +192,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return ts.restart(observation=observation, reward_spec=self._reward_spec)
 
     def _compute_potential(self, new_value: float, old_value: float) -> float:
-        new_signed_square = new_value * abs(new_value)
-        old_signed_square = old_value * abs(old_value)
+        new_signed_square = (new_value + 1) ** 2
+        old_signed_square = (old_value + 1) ** 2
 
         return (self._gamma * new_signed_square) - old_signed_square
 
@@ -202,7 +206,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
-        (top_out, clear, attack, board, vis_board, active_piece, hold_piece, queue) = (
+        (top_out, clear, attack, is_spin, board, vis_board, active_piece, hold_piece, queue) = (
             self._execute_action(
                 self._board,
                 self._vis_board,
@@ -215,10 +219,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         # Get board stats and compute supplementary rewards BEFORE garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
-        height_penalty = self._height_penalty * self._compute_potential(heights_val, self._last_heights)
-        hole_penalty = self._hole_penalty * self._compute_potential(holes_val, self._last_holes)
-        skyline_penalty = self._skyline_penalty * self._compute_potential(skyline_val, self._last_skyline)
-        bumpy_penalty = self._bumpy_penalty * self._compute_potential(bumpy_val, self._last_bumpy)
+        height_penalty = self._height_penalty * (heights_val - self._last_heights)
+        hole_penalty = self._hole_penalty * (holes_val - self._last_holes)
+        skyline_penalty = self._skyline_penalty * (skyline_val - self._last_skyline)
+        bumpy_penalty = self._bumpy_penalty * (bumpy_val - self._last_bumpy)
 
         if attack > 0:
             self._remove_attack_from_garbage_queue(attack)
@@ -232,9 +236,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         b2b_val = self._scorer._b2b
         combo_val = self._scorer._combo
 
-        b2b_reward = self._b2b_reward * self._compute_potential(b2b_val, self._last_b2b)
+        b2b_reward = self._b2b_reward if b2b_val > self._last_b2b else 0.0
+        combo_reward = self._combo_reward if combo_val > self._last_combo else 0.0
 
-        combo_reward = self._combo_reward * self._compute_potential(combo_val, self._last_combo)
+        b2b_reward = b2b_reward + (self._compute_potential(b2b_val, self._last_b2b))
+        combo_reward = combo_reward + (self._compute_potential(combo_val, self._last_combo))
+
+        spin_reward = self._spin_reward if is_spin else 0.0
 
         # Get board stats AFTER garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
@@ -275,6 +283,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "clear": np.array(clear),
             "b2b_reward": np.array(b2b_reward),
             "combo_reward": np.array(combo_reward),
+            "spin_reward": np.array(spin_reward),
             "height_penalty": np.array(height_penalty),
             "hole_penalty": np.array(hole_penalty),
             "skyline_penalty": np.array(skyline_penalty),
@@ -299,7 +308,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         hold_piece: PieceType,
         queue: List[PieceType],
         key_sequence: np.ndarray,
-    ) -> Tuple[bool, int, float, np.ndarray, Piece, PieceType, List[PieceType]]:
+    ) -> Tuple[bool, int, float, bool, np.ndarray, np.ndarray, Piece, PieceType, List[PieceType]]:
         # Avoid modifying original state
         board = copy.deepcopy(board)
         active_piece = copy.deepcopy(active_piece)
@@ -325,12 +334,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                         self._lock_piece(active_piece, board, vis_board, queue)
                     )
 
-                    attack = self._scorer.judge(active_piece, board, clear)
+                    attack, is_spin = self._scorer.judge(active_piece, board, clear)
 
         return (
             top_out,
             clear,
             attack,
+            is_spin,
             next_board,
             next_vis_board,
             next_piece,

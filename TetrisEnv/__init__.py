@@ -11,7 +11,7 @@ from .Scorer import Scorer
 from .PyTetrisEnv import PyTetrisEnv
 from .PyTetrisRunner import PyTetrisRunner
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "PieceType",

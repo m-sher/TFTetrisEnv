@@ -2,6 +2,7 @@ from enum import Enum
 from .Pieces import Piece, PieceType
 from .helpers import overlaps
 import numpy as np
+from typing import Tuple
 
 
 class Spins(Enum):
@@ -22,7 +23,7 @@ class Scorer:
         self._b2b = -1
         self._combo = -1
 
-    def judge(self, piece: Piece, board: np.ndarray, clears: int) -> float:
+    def judge(self, piece: Piece, board: np.ndarray, clears: int) -> Tuple[float, bool]:
         attack = 0
         spin = Spins.NO_SPIN
         surge = 0
@@ -142,4 +143,4 @@ class Scorer:
         self._b2b = new_b2b
         self._combo = new_combo
 
-        return attack
+        return attack, spin != Spins.NO_SPIN
