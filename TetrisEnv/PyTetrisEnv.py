@@ -5,6 +5,7 @@ from .RotationSystem import RotationSystem
 from .Scorer import Scorer
 from .Pieces import Piece, PieceType
 from .Moves import Moves, Keys
+from .TetrioRandom import TetrioRNG
 from .helpers import overlaps
 import numpy as np
 import random
@@ -48,6 +49,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._seed = seed
 
         self._random = random.Random(seed)
+        self._tetrio_rng = TetrioRNG(seed)
 
         self._board = np.zeros((24, 10), dtype=np.float32)
         self._vis_board = np.zeros((24, 10), dtype=np.int32)
@@ -68,14 +70,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._hold_piece = PieceType.N
 
         self._queue_size = queue_size
-        self._valid_pieces = [
-            piece
-            for piece in PieceType
-            if piece is not PieceType.N and piece is not PieceType.G
-        ]
-        self._next_bag = self._random.sample(
-            self._valid_pieces, len(self._valid_pieces)
-        )
+        self._next_bag = self._tetrio_rng.next_bag()
+        
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
 
@@ -176,9 +172,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._hold_piece = PieceType.N
 
-        self._next_bag = self._random.sample(
-            self._valid_pieces, len(self._valid_pieces)
-        )
+        self._next_bag = self._tetrio_rng.next_bag()
+
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
 
@@ -567,9 +562,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         while len(queue) < self._queue_size:
             queue.append(self._next_bag.pop(0))
             if len(self._next_bag) == 0:
-                self._next_bag = self._random.sample(
-                    self._valid_pieces, len(self._valid_pieces)
-                )
+                self._next_bag = self._tetrio_rng.next_bag()
         return queue
 
     def _clear_lines(

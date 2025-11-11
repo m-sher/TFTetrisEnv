@@ -10,8 +10,9 @@ from .RotationSystem import RotationSystem
 from .Scorer import Scorer
 from .PyTetrisEnv import PyTetrisEnv
 from .PyTetrisRunner import PyTetrisRunner
+from .TetrioRandom import TetrioRNG
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "PieceType",
@@ -22,6 +23,7 @@ __all__ = [
     "Scorer",
     "PyTetrisEnv",
     "PyTetrisRunner",
+    "TetrioRNG",
 ]
 
 
