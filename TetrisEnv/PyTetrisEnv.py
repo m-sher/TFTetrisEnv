@@ -155,6 +155,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._seed = (self._seed + 1) if self._seed else None
 
         self._random = random.Random(self._seed)
+        self._tetrio_rng.reset()
 
         self._board[:] = 0.0
         self._vis_board[:] = 0

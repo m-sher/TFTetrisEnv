@@ -7,10 +7,8 @@ TETROMINOS = [PieceType.Z, PieceType.L, PieceType.O, PieceType.S, PieceType.I, P
 class TetrioRNG:
 
     def __init__(self, seed: int):
-        t = seed % 2147483647
-        if t <= 0:
-            t += 2147483646
-        self._t = t
+        self._seed = seed
+        self.reset()
 
     def next_int(self) -> int:
         self._t = (16807 * self._t) % 2147483647
@@ -27,3 +25,9 @@ class TetrioRNG:
             bag[i], bag[j] = bag[j], bag[i]
             i -= 1
         return bag
+
+    def reset(self) -> None:
+        t = self._seed % 2147483647
+        if t <= 0:
+            t += 2147483646
+        self._t = t
