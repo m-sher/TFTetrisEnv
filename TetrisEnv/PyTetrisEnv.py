@@ -6,6 +6,7 @@ from .Scorer import Scorer
 from .Pieces import Piece, PieceType
 from .Moves import Moves, Keys
 from .TetrioRandom import TetrioRNG
+from .KeySequences import KeySequenceFinder
 from .helpers import overlaps
 import numpy as np
 import random
@@ -20,6 +21,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         max_holes: Optional[int],
         max_height: int,
         max_steps: Optional[int],
+        max_len: int,
         seed: Optional[int],
         idx: int,
         garbage_chance: float = 0.0,
@@ -39,6 +41,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_holes = max_holes
         self._max_height = max_height
         self._max_steps = max_steps
+        self._max_len = max_len
 
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
@@ -55,7 +58,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._vis_board = np.zeros((24, 10), dtype=np.int32)
 
         self._rotation_system = RotationSystem()
-
+        self._key_sequence_finder = KeySequenceFinder(self._rotation_system)
         self._scorer = Scorer()
 
         self._step_num = 0
@@ -104,6 +107,12 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             ),
             "b2b_combo": array_spec.ArraySpec(
                 shape=(2,), dtype=np.float32, name="b2b_combo"
+            ),
+            "non_hold_sequences": array_spec.ArraySpec(
+                shape=(800, max_len), dtype=np.int64, name="non_hold_sequences"
+            ),
+            "hold_sequences": array_spec.ArraySpec(
+                shape=(800, max_len + 1), dtype=np.int64, name="hold_sequences"
             ),
         }
 
@@ -395,11 +404,31 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
         stats = np.array([self._scorer._b2b, self._scorer._combo], dtype=np.float32)
 
+        non_hold_sequences = self._key_sequence_finder.find_all(
+            board=self._board,
+            piece=self._active_piece,
+            max_len=self._max_len,
+            is_hold=False,
+        )
+
+        hold_sequences = self._key_sequence_finder.find_all(
+            board=self._board,
+            piece=(
+                self._spawn_piece(self._hold_piece)
+                if self._hold_piece != PieceType.N
+                else self._spawn_piece(self._queue[0])
+            ),
+            max_len=self._max_len + 1,
+            is_hold=True,
+        )
+
         observation = {
             "board": self._board[..., None],
             "vis_board": self._vis_board[..., None],
             "pieces": pieces,
             "b2b_combo": stats,
+            "non_hold_sequences": non_hold_sequences,
+            "hold_sequences": hold_sequences,
         }
 
         return observation

@@ -55,9 +55,9 @@ class KeySequenceFinder:
         board: np.ndarray,
         piece: Piece,
         goals: Sequence[Goal],
+        max_len: int,
+        is_hold: bool,
     ) -> List[Optional[List[int]]]:
-        """Return minimal sequences (Keys ints) that reach each goal placement."""
-
         self._validate_board(board)
         if not goals:
             return []
@@ -71,7 +71,7 @@ class KeySequenceFinder:
         )
 
         if overlaps(start_piece.cells, start_piece.loc, board):
-            raise ValueError("Starting piece overlaps the board.")
+            return [None for _ in goals]
 
         goal_map = self._normalize_goals(goals)
         results: List[Optional[List[int]]] = [None] * len(goals)
@@ -82,6 +82,8 @@ class KeySequenceFinder:
         parents: MutableMapping[State, Tuple[Optional[State], Optional[int]]] = {
             start_state: (None, None)
         }
+        depths: Dict[State, int] = {start_state: 0}
+        max_path_length = max_len - 2
 
         remaining = set(goal_map.keys())
         while queue and remaining:
@@ -89,19 +91,25 @@ class KeySequenceFinder:
             current_piece = self._piece_from_state(
                 current_state, start_piece.piece_type, rotation_system
             )
+            current_depth = depths[current_state]
 
             drop_row = self._hard_drop_row(current_piece, board)
             goal_key = (current_state.rotation % 4, drop_row, current_state.col)
             if goal_key in remaining:
                 sequence = (
                     [Keys.START]
+                    + ([Keys.HOLD] if is_hold else [])
                     + self._reconstruct_sequence(current_state, parents)
                     + [Keys.HARD_DROP]
                 )
-                results[goal_map[goal_key]] = sequence
-                remaining.remove(goal_key)
-                if not remaining:
-                    break
+                if len(sequence) <= max_len:
+                    results[goal_map[goal_key]] = sequence
+                    remaining.remove(goal_key)
+                    if not remaining:
+                        break
+
+            if current_depth >= max_path_length:
+                continue
 
             for key in self._ALLOWED_KEYS:
                 next_piece = self._apply_key(current_piece, key, board, rotation_system)
@@ -110,7 +118,11 @@ class KeySequenceFinder:
                 next_state = self._state_from_piece(next_piece)
                 if next_state in parents:
                     continue
+                next_depth = current_depth + 1
+                if next_depth > max_path_length:
+                    continue
                 parents[next_state] = (current_state, key)
+                depths[next_state] = next_depth
                 queue.append(next_state)
 
         return results
@@ -119,13 +131,13 @@ class KeySequenceFinder:
         self,
         board: np.ndarray,
         piece: Piece,
+        max_len: int,
+        is_hold: bool,
         return_timing: bool = False,
     ) -> (
-        Tuple[List[Tuple[Placement, List[int]]], Dict[str, float]]
-        | List[Tuple[Placement, List[int]]]
+        Tuple[np.ndarray, List[Placement], Dict[str, float]]
+        | Tuple[np.ndarray, List[Placement]]
     ):
-        """Enumerate every reachable placement and its minimal key sequence."""
-
         t0 = time.perf_counter()
         placements = self._placement_finder.find(board, piece.piece_type)
         t1 = time.perf_counter()
@@ -134,13 +146,49 @@ class KeySequenceFinder:
             Goal(rotation=placement.rotation, row=placement.row, col=placement.col)
             for placement in placements
         ]
-        raw_sequences = self.find_sequences(board, piece, goals)
+        raw_sequences = self.find_sequences(
+            board, piece, goals, max_len=max_len, is_hold=is_hold
+        )
         t2 = time.perf_counter()
 
-        sequences = [
-            sequence if sequence is not None else [-1] for sequence in raw_sequences
-        ]
-        results = list(zip(placements, sequences))
+        board_rows, board_cols = board.shape
+        visible_rows = 20
+        rotations = 4
+
+        if max_len < 2:
+            raise ValueError(
+                "max_len must be at least 2 to include START and HARD_DROP keys."
+            )
+        if board_cols != 10:
+            raise ValueError("Board must have exactly 10 columns.")
+        if board_rows < visible_rows:
+            raise ValueError("Board must have at least 20 rows.")
+
+        visible_start = board_rows - visible_rows
+        total_positions = rotations * visible_rows * board_cols
+        sequences_array = np.full((total_positions, max_len), Keys.PAD, dtype=np.int32)
+
+        def placement_index(rotation: int, row: int, col: int) -> Optional[int]:
+            rotation_idx = rotation % rotations
+            if col < 0 or col >= board_cols:
+                return None
+            row_idx = row - visible_start
+            if row_idx < 0 or row_idx >= visible_rows:
+                return None
+            return rotation_idx * visible_rows * board_cols + row_idx * board_cols + col
+
+        for placement, sequence in zip(placements, raw_sequences):
+            idx = placement_index(placement.rotation, placement.row, placement.col)
+            if idx is None or sequence is None:
+                continue
+
+            seq_len = len(sequence)
+            if seq_len > max_len:
+                continue
+
+            padded = np.full(max_len, Keys.PAD, dtype=np.int32)
+            padded[:seq_len] = sequence
+            sequences_array[idx] = padded
 
         if return_timing:
             timing = {
@@ -148,9 +196,9 @@ class KeySequenceFinder:
                 "paths": t2 - t1,
                 "total": t2 - t0,
             }
-            return results, timing
+            return sequences_array, timing
 
-        return results
+        return sequences_array
 
     @staticmethod
     def _validate_board(board: np.ndarray) -> None:
