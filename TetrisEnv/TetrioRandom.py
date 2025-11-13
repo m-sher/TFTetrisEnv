@@ -1,11 +1,18 @@
 from .Pieces import PieceType
 from typing import List
 
-TETROMINOS = [PieceType.Z, PieceType.L, PieceType.O, PieceType.S, PieceType.I, PieceType.J, PieceType.T]
+TETROMINOS = [
+    PieceType.Z,
+    PieceType.L,
+    PieceType.O,
+    PieceType.S,
+    PieceType.I,
+    PieceType.J,
+    PieceType.T,
+]
 
 
 class TetrioRNG:
-
     def __init__(self, seed: int):
         self._seed = seed
         self.reset()

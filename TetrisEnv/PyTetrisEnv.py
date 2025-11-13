@@ -71,7 +71,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._queue_size = queue_size
         self._next_bag = self._tetrio_rng.next_bag()
-        
+
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
 
