@@ -6,7 +6,7 @@ from .Scorer import Scorer
 from .Pieces import Piece, PieceType
 from .Moves import Moves, Keys
 from .TetrioRandom import TetrioRNG
-from .KeySequences import KeySequenceFinder
+from .KeySequencesBitboard import BitboardKeySequenceFinder
 from .helpers import overlaps
 import numpy as np
 import random
@@ -58,7 +58,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._vis_board = np.zeros((24, 10), dtype=np.int32)
 
         self._rotation_system = RotationSystem()
-        self._key_sequence_finder = KeySequenceFinder(self._rotation_system)
+        self._key_sequence_finder = BitboardKeySequenceFinder(self._rotation_system)
         self._scorer = Scorer()
 
         self._step_num = 0

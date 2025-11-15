@@ -11,8 +11,9 @@ from .Scorer import Scorer
 from .PyTetrisEnv import PyTetrisEnv
 from .PyTetrisRunner import PyTetrisRunner
 from .TetrioRandom import TetrioRNG
+from .KeySequencesBitboard import BitboardKeySequenceFinder
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "PieceType",
@@ -24,6 +25,7 @@ __all__ = [
     "PyTetrisEnv",
     "PyTetrisRunner",
     "TetrioRNG",
+    "BitboardKeySequenceFinder",
 ]
 
 

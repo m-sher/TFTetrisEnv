@@ -371,10 +371,3 @@ class KeySequenceFinder:
             key = (goal.rotation % 4, int(goal.row), int(goal.col))
             mapping[key] = idx
         return mapping
-
-
-__all__ = [
-    "Goal",
-    "State",
-    "KeySequenceFinder",
-]
