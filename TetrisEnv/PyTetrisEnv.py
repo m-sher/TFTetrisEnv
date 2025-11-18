@@ -32,10 +32,10 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._b2b_reward = 2.0
         self._combo_reward = 0.25
         self._spin_reward = 1.0
-        self._hole_penalty = -0.01
-        self._height_penalty = -0.05
-        self._skyline_penalty = -0.025
-        self._bumpy_penalty = -0.01
+        self._hole_penalty = -0.1
+        self._height_penalty = -0.01
+        self._skyline_penalty = -0.001
+        self._bumpy_penalty = -0.001
         self._death_penalty = -100.0
 
         self._max_holes = max_holes
@@ -233,11 +233,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # Get board stats and compute supplementary rewards BEFORE garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
 
-        height_penalty = self._height_penalty * heights_val
-        hole_penalty = self._hole_penalty * holes_val
-        skyline_penalty = self._skyline_penalty * skyline_val
-        bumpy_penalty = self._bumpy_penalty * bumpy_val
-
         if attack > 0:
             self._remove_attack_from_garbage_queue(attack)
 
@@ -252,12 +247,28 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         b2b_reward = 1.0 if b2b_val > self._last_b2b else 0.0
         combo_reward = 1.0 if combo_val > self._last_combo else 0.0
+        height_penalty = 1.0 if heights_val > self._last_heights else 0.0
+        hole_penalty = 1.0 if holes_val > self._last_holes else 0.0
+        skyline_penalty = 1.0 if skyline_val > self._last_skyline else 0.0
+        bumpy_penalty = 1.0 if bumpy_val > self._last_bumpy else 0.0
 
         b2b_reward = self._b2b_reward * (
             b2b_reward + (self._compute_potential(b2b_val, self._last_b2b))
         )
         combo_reward = self._combo_reward * (
             combo_reward + (self._compute_potential(combo_val, self._last_combo))
+        )
+        height_penalty = self._height_penalty * (
+            height_penalty + (self._compute_potential(heights_val, self._last_heights))
+        )
+        hole_penalty = self._hole_penalty * (
+            hole_penalty + (self._compute_potential(holes_val, self._last_holes))
+        )
+        skyline_penalty = self._skyline_penalty * (
+            skyline_penalty + (self._compute_potential(skyline_val, self._last_skyline))
+        )
+        bumpy_penalty = self._bumpy_penalty * (
+            bumpy_penalty + (self._compute_potential(bumpy_val, self._last_bumpy))
         )
 
         spin_reward = self._spin_reward if is_spin else 0.0

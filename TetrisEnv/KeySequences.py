@@ -168,17 +168,20 @@ class KeySequenceFinder:
         total_positions = rotations * visible_rows * board_cols
         sequences_array = np.full((total_positions, max_len), Keys.PAD, dtype=np.int32)
 
-        def placement_index(rotation: int, row: int, col: int) -> Optional[int]:
+        def placement_index(rotation: int, row: int, display_col: int) -> Optional[int]:
             rotation_idx = rotation % rotations
-            if col < 0 or col >= board_cols:
+            if display_col < 0 or display_col >= board_cols:
                 return None
             row_idx = row - visible_start
             if row_idx < 0 or row_idx >= visible_rows:
                 return None
-            return rotation_idx * visible_rows * board_cols + row_idx * board_cols + col
+            return (
+                rotation_idx * visible_rows * board_cols + row_idx * board_cols + display_col
+            )
 
         for placement, sequence in zip(placements, raw_sequences):
-            idx = placement_index(placement.rotation, placement.row, placement.col)
+            display_col = int(placement.cells[:, 1].min())
+            idx = placement_index(placement.rotation, placement.row, display_col)
             if idx is None or sequence is None:
                 continue
 

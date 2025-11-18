@@ -110,7 +110,13 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 board_mask, piece_data, current_rotation, current_row, current_col, rotation_bounds
             )
             idx = self._placement_index(
-                current_rotation, drop_row, current_col, board_cols, visible_start, self._VISIBLE_ROWS
+                current_rotation,
+                drop_row,
+                current_col,
+                board_cols,
+                visible_start,
+                self._VISIBLE_ROWS,
+                min_col_offsets,
             )
             if idx is not None and not filled_slots[idx]:
                 sequence = self._materialize_sequence(
@@ -271,14 +277,16 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         board_cols: int,
         visible_start: int,
         visible_rows: int,
+        min_col_offsets: np.ndarray,
     ) -> Optional[int]:
-        if col < 0 or col >= board_cols:
+        rotation_idx = rotation % 4
+        actual_col = col + int(min_col_offsets[rotation_idx])
+        if actual_col < 0 or actual_col >= board_cols:
             return None
         row_idx = row - visible_start
         if row_idx < 0 or row_idx >= visible_rows:
             return None
-        rotation_idx = rotation % 4
-        return rotation_idx * visible_rows * board_cols + row_idx * board_cols + col
+        return rotation_idx * visible_rows * board_cols + row_idx * board_cols + actual_col
 
     def _apply_key_state(
         self,
