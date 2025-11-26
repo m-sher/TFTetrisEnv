@@ -1,5 +1,6 @@
 from .Pieces import PieceType
 from typing import List
+import random
 
 TETROMINOS = [
     PieceType.Z,
@@ -13,7 +14,7 @@ TETROMINOS = [
 
 
 class TetrioRNG:
-    def __init__(self, seed: int):
+    def __init__(self, seed: int | None = None):
         self._seed = seed
         self.reset()
 
@@ -34,7 +35,8 @@ class TetrioRNG:
         return bag
 
     def reset(self) -> None:
-        t = self._seed % 2147483647
+        seed = self._seed if self._seed is not None else random.randint(0, 2147483646)
+        t = seed % 2147483647
         if t <= 0:
             t += 2147483646
         self._t = t

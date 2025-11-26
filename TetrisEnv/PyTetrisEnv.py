@@ -32,7 +32,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._b2b_reward = 2.0
         self._combo_reward = 0.25
         self._spin_reward = 1.0
-        self._hole_penalty = -0.1
+        self._hole_penalty = -0.001
         self._height_penalty = -0.01
         self._skyline_penalty = -0.001
         self._bumpy_penalty = -0.001
@@ -108,11 +108,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "b2b_combo": array_spec.ArraySpec(
                 shape=(2,), dtype=np.float32, name="b2b_combo"
             ),
-            "non_hold_sequences": array_spec.ArraySpec(
-                shape=(800, max_len), dtype=np.int64, name="non_hold_sequences"
-            ),
-            "hold_sequences": array_spec.ArraySpec(
-                shape=(800, max_len + 1), dtype=np.int64, name="hold_sequences"
+            "sequences": array_spec.ArraySpec(
+                shape=(160, max_len), dtype=np.int64, name="sequences"
             ),
         }
 
@@ -161,7 +158,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         return self._reward_spec
 
     def _reset(self) -> ts.TimeStep:
-        self._seed = (self._seed + 1) if self._seed else None
+        self._seed = (self._seed + 1) if self._seed is not None else None
 
         self._random = random.Random(self._seed)
         self._tetrio_rng.reset()
@@ -414,17 +411,18 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 if self._hold_piece != PieceType.N
                 else self._spawn_piece(self._queue[0])
             ),
-            max_len=self._max_len + 1,
+            max_len=self._max_len,
             is_hold=True,
         )
+
+        sequences = np.concatenate([non_hold_sequences, hold_sequences], axis=0)
 
         observation = {
             "board": self._board[..., None],
             "vis_board": self._vis_board[..., None],
             "pieces": pieces,
             "b2b_combo": stats,
-            "non_hold_sequences": non_hold_sequences,
-            "hold_sequences": hold_sequences,
+            "sequences": sequences,
         }
 
         return observation
