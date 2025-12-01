@@ -9,6 +9,7 @@ from .KeySequences import KeySequenceFinder
 from .Moves import Keys
 from .Pieces import Piece, PieceType
 from .RotationSystem import RotationSystem
+from .Scorer import Scorer
 from .helpers import overlaps
 
 
@@ -16,7 +17,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
     _VISIBLE_ROWS = 20
     _BOARD_COLS = 10
     _ROTATIONS = 4
-    _KICK_STATES = 2
+    _SPIN_STATES = 2
 
     def __init__(self, rotation_system: RotationSystem | None = None) -> None:
         super().__init__(rotation_system)
@@ -63,7 +64,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         state_count = board_rows * board_cols * self._ROTATIONS
         visible_start = board_rows - self._VISIBLE_ROWS
         visible_end = visible_start + self._VISIBLE_ROWS
-        total_positions = self._ROTATIONS * board_cols * self._KICK_STATES
+        total_positions = self._ROTATIONS * board_cols * self._SPIN_STATES
 
         visited = np.zeros(state_count, dtype=np.bool_)
         parents = np.full(state_count, -1, dtype=np.int32)
@@ -71,7 +72,9 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         depths = np.full(state_count, -1, dtype=np.int16)
         queue = np.empty(state_count, dtype=np.int32)
         filled_slots = np.zeros(total_positions, dtype=np.bool_)
-        entered_via_kick = np.zeros(state_count, dtype=np.bool_)
+        last_delta_r = np.zeros(state_count, dtype=np.int8)
+        last_delta_row = np.zeros(state_count, dtype=np.int16)
+        last_delta_col = np.zeros(state_count, dtype=np.int16)
 
         piece_type = start_piece.piece_type
         kick_table = (
@@ -125,19 +128,31 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 rotation_bounds,
             )
             if visible_start <= drop_row < visible_end:
-                has_kick = bool(entered_via_kick[current_state])
-                idx = self._placement_index(
-                    current_rotation,
-                    current_col,
-                    board_cols,
-                    min_col_offsets,
-                    has_kick,
+                sequence = self._materialize_sequence(
+                    current_state, parents, parent_keys, is_hold
                 )
-                if idx is not None and not filled_slots[idx]:
-                    sequence = self._materialize_sequence(
-                        current_state, parents, parent_keys, is_hold
+                if len(sequence) <= max_sequence_len:
+                    delta_r = int(last_delta_r[current_state])
+                    delta_row = int(last_delta_row[current_state])
+                    delta_col = int(last_delta_col[current_state])
+                    is_spin = self._state_is_spin(
+                        board=board,
+                        piece_type=piece_type,
+                        rotation=current_rotation,
+                        drop_row=drop_row,
+                        col=current_col,
+                        delta_r=delta_r,
+                        delta_row=delta_row,
+                        delta_col=delta_col,
                     )
-                    if len(sequence) <= max_sequence_len:
+                    idx = self._placement_index(
+                        current_rotation,
+                        current_col,
+                        board_cols,
+                        min_col_offsets,
+                        is_spin,
+                    )
+                    if idx is not None and not filled_slots[idx]:
                         padded = np.full(max_len, Keys.PAD, dtype=np.int32)
                         padded[: len(sequence)] = sequence
                         sequences_array[idx] = padded
@@ -161,7 +176,15 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 if next_state_tuple is None:
                     continue
 
-                next_row, next_col, next_rotation, used_kick = next_state_tuple
+                (
+                    next_row,
+                    next_col,
+                    next_rotation,
+                    delta_r,
+                    delta_row_move,
+                    delta_col_move,
+                ) = next_state_tuple
+
                 next_state = self._encode_state(
                     next_row,
                     next_col,
@@ -183,7 +206,9 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 parents[next_state] = current_state
                 parent_keys[next_state] = key
                 depths[next_state] = next_depth
-                entered_via_kick[next_state] = used_kick
+                last_delta_r[next_state] = delta_r
+                last_delta_row[next_state] = delta_row_move
+                last_delta_col[next_state] = delta_col_move
 
                 queue[queue_tail] = next_state
                 queue_tail += 1
@@ -243,7 +268,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
     @staticmethod
     def _empty_sequences_array(board: np.ndarray, max_len: int) -> np.ndarray:
         rotations = BitboardKeySequenceFinder._ROTATIONS
-        kick_states = BitboardKeySequenceFinder._KICK_STATES
+        kick_states = BitboardKeySequenceFinder._SPIN_STATES
         board_rows, board_cols = board.shape
 
         if max_len < 2:
@@ -293,15 +318,15 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         col: int,
         board_cols: int,
         min_col_offsets: np.ndarray,
-        has_kick: bool,
+        is_spin: bool,
     ) -> Optional[int]:
         rotation_idx = rotation % 4
         actual_col = col + int(min_col_offsets[rotation_idx])
         if actual_col < 0 or actual_col >= board_cols:
             return None
-        kick_idx = 1 if has_kick else 0
-        stride = BitboardKeySequenceFinder._KICK_STATES
-        return rotation_idx * board_cols * stride + actual_col * stride + kick_idx
+        spin_idx = 1 if is_spin else 0
+        stride = BitboardKeySequenceFinder._SPIN_STATES
+        return rotation_idx * board_cols * stride + actual_col * stride + spin_idx
 
     def _apply_key_state(
         self,
@@ -314,59 +339,64 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         rotation: int,
         key: int,
         board_rows: int,
-    ) -> Optional[Tuple[int, int, int, bool]]:
+    ) -> Optional[Tuple[int, int, int, int, int, int]]:
+        delta_r = 0
         if key == Keys.CLOCKWISE:
-            return self._rotate_state(
+            delta_r = +1
+            result = self._rotate_state(
                 board_mask, piece_data, row_bounds, kick_table, row, col, rotation, +1
             )
-        if key == Keys.ANTICLOCKWISE:
-            return self._rotate_state(
+        elif key == Keys.ANTICLOCKWISE:
+            delta_r = -1
+            result = self._rotate_state(
                 board_mask, piece_data, row_bounds, kick_table, row, col, rotation, -1
             )
-        if key == Keys.ROTATE_180:
-            return self._rotate_state(
+        elif key == Keys.ROTATE_180:
+            delta_r = +2
+            result = self._rotate_state(
                 board_mask, piece_data, row_bounds, kick_table, row, col, rotation, +2
             )
-        if key == Keys.TAP_LEFT:
-            shifted = self._shift_once(
+        elif key == Keys.TAP_LEFT:
+            result = self._shift_once(
                 board_mask, piece_data, row, col, rotation, -1, row_bounds
             )
-            if shifted is None:
-                return None
-            return shifted[0], shifted[1], shifted[2], False
-        if key == Keys.TAP_RIGHT:
-            shifted = self._shift_once(
+        elif key == Keys.TAP_RIGHT:
+            result = self._shift_once(
                 board_mask, piece_data, row, col, rotation, +1, row_bounds
             )
-            if shifted is None:
-                return None
-            return shifted[0], shifted[1], shifted[2], False
-        if key == Keys.DAS_LEFT:
-            shifted = self._shift_das(
+        elif key == Keys.DAS_LEFT:
+            result = self._shift_das(
                 board_mask, piece_data, row, col, rotation, -1, row_bounds
             )
-            if shifted is None:
-                return None
-            return shifted[0], shifted[1], shifted[2], False
-        if key == Keys.DAS_RIGHT:
-            shifted = self._shift_das(
+        elif key == Keys.DAS_RIGHT:
+            result = self._shift_das(
                 board_mask, piece_data, row, col, rotation, +1, row_bounds
             )
-            if shifted is None:
-                return None
-            return shifted[0], shifted[1], shifted[2], False
-        if key == Keys.SOFT_DROP:
-            dropped = self._soft_drop_state(
+        elif key == Keys.SOFT_DROP:
+            result = self._soft_drop_state(
                 board_mask, piece_data, row, col, rotation, board_rows, row_bounds
             )
-            if dropped is None:
-                return None
-            return dropped[0], dropped[1], dropped[2], False
-        if key == Keys.START:
-            return (row, col, rotation, False)
-        if key in (Keys.HARD_DROP, Keys.HOLD):
+        elif key == Keys.START:
+            result = (row, col, rotation)
+        elif key in (Keys.HARD_DROP, Keys.HOLD):
             raise ValueError("HARD_DROP and HOLD are not valid movement keys.")
-        raise ValueError(f"Unsupported key: {key}")
+        else:
+            raise ValueError(f"Unsupported key: {key}")
+
+        if result is None:
+            return None
+
+        next_row, next_col, next_rotation = result
+        delta_row = next_row - row
+        delta_col = next_col - col
+        return (
+            next_row,
+            next_col,
+            next_rotation,
+            int(delta_r),
+            int(delta_row),
+            int(delta_col),
+        )
 
     def _rotate_state(
         self,
@@ -378,10 +408,10 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         col: int,
         rotation: int,
         delta_r: int,
-    ) -> Optional[Tuple[int, int, int, bool]]:
+    ) -> Optional[Tuple[int, int, int]]:
         new_rotation = (rotation + delta_r) % 4
         if self._can_occupy(board_mask, piece_data, new_rotation, row, col, row_bounds):
-            return row, col, new_rotation, False
+            return row, col, new_rotation
 
         kicks = kick_table.get((rotation, new_rotation))
         if kicks is None:
@@ -393,7 +423,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
             if self._can_occupy(
                 board_mask, piece_data, new_rotation, new_row, new_col, row_bounds
             ):
-                return new_row, new_col, new_rotation, True
+                return new_row, new_col, new_rotation
         return None
 
     def _shift_once(
@@ -520,3 +550,34 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         sequence.extend(keys)
         sequence.append(Keys.HARD_DROP)
         return np.array(sequence, dtype=np.int32)
+
+    def _state_is_spin(
+        self,
+        board: np.ndarray,
+        piece_type: PieceType,
+        rotation: int,
+        drop_row: int,
+        col: int,
+        delta_r: int,
+        delta_row: int,
+        delta_col: int,
+    ) -> bool:
+        if delta_r == 0:
+            return False
+
+        piece = Piece(
+            piece_type=piece_type,
+            loc=np.array([drop_row, col], dtype=np.int32),
+            r=int(rotation) % 4,
+            cells=np.array(
+                self._rotation_system.orientations[piece_type][rotation % 4],
+                dtype=np.int32,
+                copy=True,
+            ),
+        )
+        piece.delta_r = int(delta_r)
+        piece.delta_loc = np.array([delta_row, delta_col], dtype=np.int32)
+
+        scorer = Scorer()
+        _, is_spin = scorer.judge(piece, board, clears=0)
+        return bool(is_spin)
