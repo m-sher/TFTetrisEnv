@@ -32,6 +32,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._b2b_reward = 2.0
         self._combo_reward = 0.25
         self._spin_reward = 1.0
+        self._easy_clear_penalty = -1.0
         self._hole_penalty = -0.001
         self._height_penalty = -0.01
         self._skyline_penalty = -0.001
@@ -128,6 +129,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             ),
             "spin_reward": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="spin_reward"
+            ),
+            "easy_clear_penalty": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="easy_clear_penalty"
             ),
             "height_penalty": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="height_penalty"
@@ -269,6 +273,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         )
 
         spin_reward = self._spin_reward if is_spin else 0.0
+        easy_clear_penalty = (
+            self._easy_clear_penalty if clear > 0 and b2b_val == -1 else 0.0
+        )
 
         # Get board stats AFTER garbage
         heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
@@ -310,6 +317,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "b2b_reward": np.array(b2b_reward),
             "combo_reward": np.array(combo_reward),
             "spin_reward": np.array(spin_reward),
+            "easy_clear_penalty": np.array(easy_clear_penalty),
             "height_penalty": np.array(height_penalty),
             "hole_penalty": np.array(hole_penalty),
             "skyline_penalty": np.array(skyline_penalty),

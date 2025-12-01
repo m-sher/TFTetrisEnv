@@ -176,7 +176,9 @@ class KeySequenceFinder:
             if row_idx < 0 or row_idx >= visible_rows:
                 return None
             return (
-                rotation_idx * visible_rows * board_cols + row_idx * board_cols + display_col
+                rotation_idx * visible_rows * board_cols
+                + row_idx * board_cols
+                + display_col
             )
 
         for placement, sequence in zip(placements, raw_sequences):

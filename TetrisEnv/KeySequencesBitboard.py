@@ -13,7 +13,6 @@ from .helpers import overlaps
 
 
 class BitboardKeySequenceFinder(KeySequenceFinder):
-
     _VISIBLE_ROWS = 20
     _BOARD_COLS = 10
     _ROTATIONS = 4
@@ -22,9 +21,9 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
     def __init__(self, rotation_system: RotationSystem | None = None) -> None:
         super().__init__(rotation_system)
         self._bitpiece_cache: Dict[PieceType, Dict[str, np.ndarray]] = {}
-        self._col_bits = (np.uint16(1) << np.arange(self._BOARD_COLS, dtype=np.uint16)).astype(
-            np.uint16
-        )
+        self._col_bits = (
+            np.uint16(1) << np.arange(self._BOARD_COLS, dtype=np.uint16)
+        ).astype(np.uint16)
 
     def find_all(
         self,
@@ -76,7 +75,9 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
 
         piece_type = start_piece.piece_type
         kick_table = (
-            rotation_system.i_kicks if piece_type == PieceType.I else rotation_system.kicks
+            rotation_system.i_kicks
+            if piece_type == PieceType.I
+            else rotation_system.kicks
         )
 
         start_row = int(start_piece.loc[0])
@@ -116,7 +117,12 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
             current_depth = int(depths[current_state])
 
             drop_row = self._hard_drop_row(
-                board_mask, piece_data, current_rotation, current_row, current_col, rotation_bounds
+                board_mask,
+                piece_data,
+                current_rotation,
+                current_row,
+                current_col,
+                rotation_bounds,
             )
             if visible_start <= drop_row < visible_end:
                 has_kick = bool(entered_via_kick[current_state])
@@ -229,7 +235,9 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
 
     def _board_to_bitmask(self, board: np.ndarray) -> np.ndarray:
         occupied = (board != 0).astype(np.uint16)
-        mask_rows = (occupied * self._col_bits).sum(axis=1, dtype=np.uint32).astype(np.uint16)
+        mask_rows = (
+            (occupied * self._col_bits).sum(axis=1, dtype=np.uint32).astype(np.uint16)
+        )
         return mask_rows
 
     @staticmethod
@@ -293,9 +301,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
             return None
         kick_idx = 1 if has_kick else 0
         stride = BitboardKeySequenceFinder._KICK_STATES
-        return (
-            rotation_idx * board_cols * stride + actual_col * stride + kick_idx
-        )
+        return rotation_idx * board_cols * stride + actual_col * stride + kick_idx
 
     def _apply_key_state(
         self,
