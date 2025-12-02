@@ -13,6 +13,7 @@ class PyTetrisRunner:
         max_holes: Optional[int],
         max_height: int,
         max_steps: int,
+        pathfinding: bool,
         max_len: int,
         key_dim: int,
         num_steps: int,
@@ -46,6 +47,8 @@ class PyTetrisRunner:
                 max_holes=max_holes,
                 max_height=max_height,
                 max_steps=max_steps,
+                max_len=max_len,
+                pathfinding=pathfinding,
                 seed=seed,
                 idx=idx,
                 garbage_chance=garbage_chances[idx],
@@ -153,6 +156,12 @@ class PyTetrisRunner:
             dynamic_size=False,
             element_shape=(self._num_envs,),
         )
+        all_easy_clear_penalty = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
         all_height_penalty = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
@@ -233,6 +242,7 @@ class PyTetrisRunner:
             b2b_reward = reward["b2b_reward"]
             combo_reward = reward["combo_reward"]
             spin_reward = reward["spin_reward"]
+            easy_clear_penalty = reward["easy_clear_penalty"]
             height_penalty = reward["height_penalty"]
             hole_penalty = reward["hole_penalty"]
             skyline_penalty = reward["skyline_penalty"]
@@ -256,6 +266,7 @@ class PyTetrisRunner:
             all_b2b_reward = all_b2b_reward.write(t, b2b_reward)
             all_combo_reward = all_combo_reward.write(t, combo_reward)
             all_spin_reward = all_spin_reward.write(t, spin_reward)
+            all_easy_clear_penalty = all_easy_clear_penalty.write(t, easy_clear_penalty)
             all_height_penalty = all_height_penalty.write(t, height_penalty)
             all_hole_penalty = all_hole_penalty.write(t, hole_penalty)
             all_skyline_penalty = all_skyline_penalty.write(t, skyline_penalty)
@@ -276,6 +287,7 @@ class PyTetrisRunner:
         all_b2b_reward = all_b2b_reward.stack()
         all_combo_reward = all_combo_reward.stack()
         all_spin_reward = all_spin_reward.stack()
+        all_easy_clear_penalty = all_easy_clear_penalty.stack()
         all_height_penalty = all_height_penalty.stack()
         all_hole_penalty = all_hole_penalty.stack()
         all_skyline_penalty = all_skyline_penalty.stack()
@@ -296,6 +308,7 @@ class PyTetrisRunner:
             all_b2b_reward,
             all_combo_reward,
             all_spin_reward,
+            all_easy_clear_penalty,
             all_height_penalty,
             all_hole_penalty,
             all_skyline_penalty,

@@ -22,6 +22,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         max_height: int,
         max_steps: Optional[int],
         max_len: int,
+        pathfinding: bool,
         seed: Optional[int],
         idx: int,
         garbage_chance: float = 0.0,
@@ -43,6 +44,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_height = max_height
         self._max_steps = max_steps
         self._max_len = max_len
+        self._pathfinding = pathfinding
 
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
@@ -405,25 +407,28 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
         stats = np.array([self._scorer._b2b, self._scorer._combo], dtype=np.float32)
 
-        non_hold_sequences = self._key_sequence_finder.find_all(
-            board=self._board,
-            piece=self._active_piece,
-            max_len=self._max_len,
-            is_hold=False,
-        )
+        if self._pathfinding:
+            non_hold_sequences = self._key_sequence_finder.find_all(
+                board=self._board,
+                piece=self._active_piece,
+                max_len=self._max_len,
+                is_hold=False,
+            )
 
-        hold_sequences = self._key_sequence_finder.find_all(
-            board=self._board,
-            piece=(
-                self._spawn_piece(self._hold_piece)
-                if self._hold_piece != PieceType.N
-                else self._spawn_piece(self._queue[0])
-            ),
-            max_len=self._max_len,
-            is_hold=True,
-        )
+            hold_sequences = self._key_sequence_finder.find_all(
+                board=self._board,
+                piece=(
+                    self._spawn_piece(self._hold_piece)
+                    if self._hold_piece != PieceType.N
+                    else self._spawn_piece(self._queue[0])
+                ),
+                max_len=self._max_len,
+                is_hold=True,
+            )
 
-        sequences = np.concatenate([non_hold_sequences, hold_sequences], axis=0)
+            sequences = np.concatenate([non_hold_sequences, hold_sequences], axis=0)
+        else:
+            sequences = np.zeros((160, self._max_len), dtype=np.int64)
 
         observation = {
             "board": self._board[..., None],
