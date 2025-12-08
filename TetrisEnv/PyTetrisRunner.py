@@ -1,4 +1,5 @@
 from TetrisEnv.PyTetrisEnv import PyTetrisEnv
+from TetrisEnv.Moves import Convert
 import tensorflow as tf
 from tf_agents.environments.parallel_py_environment import ParallelPyEnvironment
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
@@ -31,6 +32,7 @@ class PyTetrisRunner:
         self._key_dim = key_dim
         self._num_steps = num_steps
         self._num_envs = num_envs
+        self._pathfinding = pathfinding
 
         self.p_model = p_model
         self.v_model = v_model
@@ -213,6 +215,7 @@ class PyTetrisRunner:
             board = time_step.observation["board"]
             pieces = time_step.observation["pieces"]
             b2b_combo = time_step.observation["b2b_combo"]
+            valid_sequences = time_step.observation["sequences"]
 
             # Render the frame
             if render:
@@ -229,9 +232,15 @@ class PyTetrisRunner:
                 screen.blit(board_surf, (0, 0))
                 pygame.display.update()
 
-            key_sequence, log_probs, masks, _ = self.p_model.predict(
-                (board, pieces, b2b_combo)
-            )
+            if self._pathfinding:
+                key_sequence, log_probs, masks, _ = self.p_model.predict(
+                    (board, pieces, b2b_combo), valid_sequences=valid_sequences
+                )
+            else:
+                key_sequence, log_probs, masks, _ = self.p_model.predict(
+                    (board, pieces, b2b_combo), valid_sequences=Convert.tf_to_sequences[None, ...]
+                )
+
             values = self.v_model.predict((board, pieces, b2b_combo))
 
             time_step = self.env.step(key_sequence)

@@ -42,7 +42,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         start_piece = self._copy_piece(piece)
         start_piece.cells = np.array(
             rotation_system.orientations[piece.piece_type][piece.r],
-            dtype=np.int32,
+            dtype=np.int64,
             copy=True,
         )
 
@@ -67,10 +67,10 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         total_positions = self._ROTATIONS * board_cols * self._SPIN_STATES
 
         visited = np.zeros(state_count, dtype=np.bool_)
-        parents = np.full(state_count, -1, dtype=np.int32)
+        parents = np.full(state_count, -1, dtype=np.int64)
         parent_keys = np.full(state_count, -1, dtype=np.int16)
         depths = np.full(state_count, -1, dtype=np.int16)
-        queue = np.empty(state_count, dtype=np.int32)
+        queue = np.empty(state_count, dtype=np.int64)
         filled_slots = np.zeros(total_positions, dtype=np.bool_)
         last_delta_r = np.zeros(state_count, dtype=np.int8)
         last_delta_row = np.zeros(state_count, dtype=np.int16)
@@ -153,7 +153,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                         is_spin,
                     )
                     if idx is not None and not filled_slots[idx]:
-                        padded = np.full(max_len, Keys.PAD, dtype=np.int32)
+                        padded = np.full(max_len, Keys.PAD, dtype=np.int64)
                         padded[: len(sequence)] = sequence
                         sequences_array[idx] = padded
                         filled_slots[idx] = True
@@ -240,7 +240,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 for col in cols:
                     mask |= np.uint16(1 << int(col))
                 masks[idx] = mask
-            row_offsets.append(unique_rows.astype(np.int32))
+            row_offsets.append(unique_rows.astype(np.int64))
             row_masks.append(masks)
             min_cols.append(int(rel_cols.min()))
             max_cols.append(int(rel_cols.max()))
@@ -261,7 +261,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
     def _board_to_bitmask(self, board: np.ndarray) -> np.ndarray:
         occupied = (board != 0).astype(np.uint16)
         mask_rows = (
-            (occupied * self._col_bits).sum(axis=1, dtype=np.uint32).astype(np.uint16)
+            (occupied * self._col_bits).sum(axis=1, dtype=np.uint64).astype(np.uint16)
         )
         return mask_rows
 
@@ -281,7 +281,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
             raise ValueError("Board must have at least 20 rows.")
 
         total_positions = rotations * board_cols * kick_states
-        return np.full((total_positions, max_len), Keys.PAD, dtype=np.int32)
+        return np.full((total_positions, max_len), Keys.PAD, dtype=np.int64)
 
     @staticmethod
     def _timing_dict(t_start: float) -> Dict[str, float]:
@@ -549,7 +549,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
             sequence.append(Keys.HOLD)
         sequence.extend(keys)
         sequence.append(Keys.HARD_DROP)
-        return np.array(sequence, dtype=np.int32)
+        return np.array(sequence, dtype=np.int64)
 
     def _state_is_spin(
         self,
@@ -567,16 +567,16 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
 
         piece = Piece(
             piece_type=piece_type,
-            loc=np.array([drop_row, col], dtype=np.int32),
+            loc=np.array([drop_row, col], dtype=np.int64),
             r=int(rotation) % 4,
             cells=np.array(
                 self._rotation_system.orientations[piece_type][rotation % 4],
-                dtype=np.int32,
+                dtype=np.int64,
                 copy=True,
             ),
         )
         piece.delta_r = int(delta_r)
-        piece.delta_loc = np.array([delta_row, delta_col], dtype=np.int32)
+        piece.delta_loc = np.array([delta_row, delta_col], dtype=np.int64)
 
         scorer = Scorer()
         _, is_spin = scorer.judge(piece, board, clears=0)
