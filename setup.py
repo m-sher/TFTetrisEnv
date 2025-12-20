@@ -1,4 +1,10 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
+
+pathfinder_module = Extension(
+    "TetrisEnv.pathfinder",
+    sources=["TetrisEnv/pathfinder.c"],
+    extra_compile_args=["-O3", "-std=c99"],
+)
 
 setup(
     name="TetrisEnv",
@@ -8,6 +14,7 @@ setup(
     author_email="michael.a.sherrick@gmail.com",
     url="https://github.com/m-sher/TFTetrisEnv",
     packages=find_packages(),
+    ext_modules=[pathfinder_module],
     install_requires=[
         "tensorflow",
         "tf-agents",

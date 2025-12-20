@@ -25,6 +25,7 @@ class PyTetrisRunner:
         garbage_rows_max: int,
         p_model: Any,
         v_model: Any,
+        temperature: float = 1.0,
         seed: int = 123,
     ) -> None:
         self._queue_size = queue_size
@@ -36,6 +37,7 @@ class PyTetrisRunner:
 
         self.p_model = p_model
         self.v_model = v_model
+        self._temperature = temperature
 
         garbage_chances = [
             garbage_chance_min
@@ -85,6 +87,8 @@ class PyTetrisRunner:
         tf.Tensor,
         tf.Tensor,
         tf.Tensor,
+        tf.Tensor,
+        tf.Tensor
     ]:
         all_boards = tf.TensorArray(
             dtype=tf.float32,
@@ -135,6 +139,12 @@ class PyTetrisRunner:
             element_shape=(self._num_envs,),
         )
         all_clears = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_app_reward = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
             dynamic_size=False,
@@ -234,11 +244,11 @@ class PyTetrisRunner:
 
             if self._pathfinding:
                 key_sequence, log_probs, masks, _ = self.p_model.predict(
-                    (board, pieces, b2b_combo), valid_sequences=valid_sequences
+                    (board, pieces, b2b_combo), valid_sequences=valid_sequences, temperature=self._temperature
                 )
             else:
                 key_sequence, log_probs, masks, _ = self.p_model.predict(
-                    (board, pieces, b2b_combo), valid_sequences=Convert.tf_to_sequences[None, ...]
+                    (board, pieces, b2b_combo), valid_sequences=Convert.tf_to_sequences[None, ...], temperature=self._temperature
                 )
 
             values = self.v_model.predict((board, pieces, b2b_combo))
@@ -248,6 +258,7 @@ class PyTetrisRunner:
             reward = time_step.reward
             attack = reward["attack"]
             clear = reward["clear"]
+            app_reward = reward["app_reward"]
             b2b_reward = reward["b2b_reward"]
             combo_reward = reward["combo_reward"]
             spin_reward = reward["spin_reward"]
@@ -272,6 +283,7 @@ class PyTetrisRunner:
             # Store the penalties and rewards
             all_attacks = all_attacks.write(t, attack)
             all_clears = all_clears.write(t, clear)
+            all_app_reward = all_app_reward.write(t, app_reward)
             all_b2b_reward = all_b2b_reward.write(t, b2b_reward)
             all_combo_reward = all_combo_reward.write(t, combo_reward)
             all_spin_reward = all_spin_reward.write(t, spin_reward)
@@ -284,6 +296,12 @@ class PyTetrisRunner:
 
             all_dones = all_dones.write(t, dones)
 
+        # bootstrap
+        board = time_step.observation["board"]
+        pieces = time_step.observation["pieces"]
+        b2b_combo = time_step.observation["b2b_combo"]
+        all_last_values = self.v_model.predict((board, pieces, b2b_combo))
+
         all_boards = all_boards.stack()
         all_pieces = all_pieces.stack()
         all_b2b_combo = all_b2b_combo.stack()
@@ -293,6 +311,7 @@ class PyTetrisRunner:
         all_values = all_values.stack()
         all_attacks = all_attacks.stack()
         all_clears = all_clears.stack()
+        all_app_reward = all_app_reward.stack()
         all_b2b_reward = all_b2b_reward.stack()
         all_combo_reward = all_combo_reward.stack()
         all_spin_reward = all_spin_reward.stack()
@@ -312,8 +331,10 @@ class PyTetrisRunner:
             all_log_probs,
             all_masks,
             all_values,
+            all_last_values,
             all_attacks,
             all_clears,
+            all_app_reward,
             all_b2b_reward,
             all_combo_reward,
             all_spin_reward,
