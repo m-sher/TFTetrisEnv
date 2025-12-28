@@ -30,7 +30,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_max: int = 0,
         gamma: float = 0.99,
     ) -> None:
-        self._app_reward = 10.0
+        self._attack_reward = 5.0
         self._b2b_reward = 0.5
         self._combo_reward = 0.1
         self._spin_reward = 1.0
@@ -67,8 +67,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._step_num = 0
 
-        self._total_attack = 0
-        self._last_app = 0
         self._last_heights = 0
         self._last_holes = 0
         self._last_skyline = 0
@@ -126,8 +124,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._reward_spec = {
             "attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack"),
             "clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="clear"),
-            "app_reward": array_spec.ArraySpec(
-                shape=(), dtype=np.float32, name="app_reward"
+            "attack_reward": array_spec.ArraySpec(
+                shape=(), dtype=np.float32, name="attack_reward"
             ),
             "b2b_reward": array_spec.ArraySpec(
                 shape=(), dtype=np.float32, name="b2b_reward"
@@ -182,8 +180,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._step_num = 0
 
-        self._total_attack = 0
-        self._last_app = 0
         self._last_heights = 0
         self._last_holes = 0
         self._last_skyline = 0
@@ -255,13 +251,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # Check if new garbage should be added to queue
         self._add_to_garbage_queue()
 
-        self._total_attack += attack
-
-        app_val = self._total_attack / self._step_num
         b2b_val = self._scorer._b2b
         combo_val = self._scorer._combo
 
-        app_reward = 1.0 if app_val > self._last_app else 0.0
         b2b_reward = 1.0 if b2b_val > self._last_b2b else 0.0
         combo_reward = 1.0 if combo_val > self._last_combo else 0.0
         height_penalty = 1.0 if heights_val > self._last_heights else 0.0
@@ -269,9 +261,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         skyline_penalty = 1.0 if skyline_val > self._last_skyline else 0.0
         bumpy_penalty = 1.0 if bumpy_val > self._last_bumpy else 0.0
 
-        app_reward = self._app_reward * (
-            app_reward + (self._compute_potential(app_val, self._last_app))
-        )
         b2b_reward = self._b2b_reward * (
             b2b_reward + (self._compute_potential(b2b_val, self._last_b2b))
         )
@@ -291,6 +280,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             bumpy_penalty + (self._compute_potential(bumpy_val, self._last_bumpy))
         )
 
+        attack_reward = self._attack_reward * attack
         spin_reward = self._spin_reward if is_spin else 0.0
         easy_clear_penalty = (
             self._easy_clear_penalty if clear > 0 and b2b_val == -1 else 0.0
@@ -319,7 +309,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._hold_piece = hold_piece
         self._queue = queue
 
-        self._last_app = app_val
         self._last_heights = heights_val
         self._last_holes = holes_val
         self._last_skyline = skyline_val
@@ -332,7 +321,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         reward = {
             "attack": np.array(attack),
             "clear": np.array(clear),
-            "app_reward": np.array(app_reward),
+            "attack_reward": np.array(attack_reward),
             "b2b_reward": np.array(b2b_reward),
             "combo_reward": np.array(combo_reward),
             "spin_reward": np.array(spin_reward),

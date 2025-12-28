@@ -144,7 +144,7 @@ class PyTetrisRunner:
             dynamic_size=False,
             element_shape=(self._num_envs,),
         )
-        all_app_reward = tf.TensorArray(
+        all_attack_reward = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
             dynamic_size=False,
@@ -258,7 +258,7 @@ class PyTetrisRunner:
             reward = time_step.reward
             attack = reward["attack"]
             clear = reward["clear"]
-            app_reward = reward["app_reward"]
+            attack_reward = reward["attack_reward"]
             b2b_reward = reward["b2b_reward"]
             combo_reward = reward["combo_reward"]
             spin_reward = reward["spin_reward"]
@@ -283,7 +283,7 @@ class PyTetrisRunner:
             # Store the penalties and rewards
             all_attacks = all_attacks.write(t, attack)
             all_clears = all_clears.write(t, clear)
-            all_app_reward = all_app_reward.write(t, app_reward)
+            all_attack_reward = all_app_reward.write(t, attack_reward)
             all_b2b_reward = all_b2b_reward.write(t, b2b_reward)
             all_combo_reward = all_combo_reward.write(t, combo_reward)
             all_spin_reward = all_spin_reward.write(t, spin_reward)
@@ -311,7 +311,7 @@ class PyTetrisRunner:
         all_values = all_values.stack()
         all_attacks = all_attacks.stack()
         all_clears = all_clears.stack()
-        all_app_reward = all_app_reward.stack()
+        all_attack_reward = all_attack_reward.stack()
         all_b2b_reward = all_b2b_reward.stack()
         all_combo_reward = all_combo_reward.stack()
         all_spin_reward = all_spin_reward.stack()
@@ -334,7 +334,7 @@ class PyTetrisRunner:
             all_last_values,
             all_attacks,
             all_clears,
-            all_app_reward,
+            all_attack_reward,
             all_b2b_reward,
             all_combo_reward,
             all_spin_reward,
