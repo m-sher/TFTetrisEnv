@@ -386,7 +386,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                         self._lock_piece(active_piece, board, vis_board, queue)
                     )
 
-                    attack, is_spin = self._scorer.judge(active_piece, board, clear)
+                    attack, is_spin = self._scorer.judge(active_piece, board, next_board, clear)
 
         return (
             top_out,

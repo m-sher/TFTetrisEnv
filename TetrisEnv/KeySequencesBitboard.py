@@ -579,5 +579,5 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         piece.delta_loc = np.array([delta_row, delta_col], dtype=np.int64)
 
         scorer = Scorer()
-        _, is_spin = scorer.judge(piece, board, clears=0)
+        _, is_spin = scorer.judge(piece, board, board, clears=0)
         return bool(is_spin)
