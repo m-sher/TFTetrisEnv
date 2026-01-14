@@ -283,7 +283,7 @@ class PyTetrisRunner:
             # Store the penalties and rewards
             all_attacks = all_attacks.write(t, attack)
             all_clears = all_clears.write(t, clear)
-            all_attack_reward = all_app_reward.write(t, attack_reward)
+            all_attack_reward = all_attack_reward.write(t, attack_reward)
             all_b2b_reward = all_b2b_reward.write(t, b2b_reward)
             all_combo_reward = all_combo_reward.write(t, combo_reward)
             all_spin_reward = all_spin_reward.write(t, spin_reward)

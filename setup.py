@@ -6,6 +6,12 @@ pathfinder_module = Extension(
     extra_compile_args=["-O3", "-std=c99"],
 )
 
+hole_finder_module = Extension(
+    "TetrisEnv.hole_finder",
+    sources=["TetrisEnv/hole_finder.c"],
+    extra_compile_args=["-O3", "-std=c99"],
+)
+
 setup(
     name="TetrisEnv",
     version="0.8.0",
@@ -14,7 +20,7 @@ setup(
     author_email="michael.a.sherrick@gmail.com",
     url="https://github.com/m-sher/TFTetrisEnv",
     packages=find_packages(),
-    ext_modules=[pathfinder_module],
+    ext_modules=[pathfinder_module, hole_finder_module],
     install_requires=[
         "tensorflow",
         "tf-agents",

@@ -7,6 +7,7 @@ from .Pieces import Piece, PieceType
 from .Moves import Moves, Keys
 from .TetrioRandom import TetrioRNG
 from .CKeySequences import CKeySequenceFinder
+from .CHoleFinder import CHoleFinder
 from .helpers import overlaps
 import numpy as np
 import random
@@ -30,15 +31,15 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_max: int = 0,
         gamma: float = 0.99,
     ) -> None:
-        self._attack_reward = 5.0
-        self._b2b_reward = 0.5
-        self._combo_reward = 0.1
-        self._spin_reward = 1.0
-        self._easy_clear_penalty = -1.0
-        self._height_penalty = -0.01
-        self._hole_penalty = -0.001
-        self._skyline_penalty = -0.001
-        self._bumpy_penalty = -0.001
+        self._attack_reward = 1.0
+        self._b2b_reward = 2.0
+        self._combo_reward = 0.25
+        self._spin_reward = 0.5
+        self._easy_clear_penalty = -2.0
+        self._height_penalty = -0.5
+        self._hole_penalty = -1.0
+        self._skyline_penalty = -0.01
+        self._bumpy_penalty = -0.01
         self._death_penalty = -100.0
 
         self._max_holes = max_holes
@@ -63,6 +64,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         self._rotation_system = RotationSystem()
         self._key_sequence_finder = CKeySequenceFinder(self._rotation_system)
+        self._hole_finder = CHoleFinder()
         self._scorer = Scorer()
 
         self._step_num = 0
@@ -203,12 +205,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         return ts.restart(observation=observation, reward_spec=self._reward_spec)
 
-    def _compute_potential(self, new_value: float, old_value: float) -> float:
-        new_signed_square = (new_value + 1) ** 2
-        old_signed_square = (old_value + 1) ** 2
-
-        return (self._gamma * new_signed_square) - old_signed_square
-
     def _step(self, key_sequence: np.ndarray) -> ts.TimeStep:
         """
         `_lock_piece` does not move piece to the bottom, and only tries
@@ -239,9 +235,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             key_sequence,
         )
 
-        # Get board stats and compute supplementary rewards BEFORE garbage
-        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
-
         if attack > 0:
             self._remove_attack_from_garbage_queue(attack)
 
@@ -251,34 +244,18 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # Check if new garbage should be added to queue
         self._add_to_garbage_queue()
 
+        # Get board stats and compute supplementary rewards AFTER garbage
+        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
+
         b2b_val = self._scorer._b2b
         combo_val = self._scorer._combo
 
-        b2b_reward = 1.0 if b2b_val > self._last_b2b else 0.0
-        combo_reward = 1.0 if combo_val > self._last_combo else 0.0
-        height_penalty = 1.0 if heights_val > self._last_heights else 0.0
-        hole_penalty = 1.0 if holes_val > self._last_holes else 0.0
-        skyline_penalty = 1.0 if skyline_val > self._last_skyline else 0.0
-        bumpy_penalty = 1.0 if bumpy_val > self._last_bumpy else 0.0
-
-        b2b_reward = self._b2b_reward * (
-            b2b_reward + (self._compute_potential(b2b_val, self._last_b2b))
-        )
-        combo_reward = self._combo_reward * (
-            combo_reward + (self._compute_potential(combo_val, self._last_combo))
-        )
-        height_penalty = self._height_penalty * (
-            height_penalty + (self._compute_potential(heights_val, self._last_heights))
-        )
-        hole_penalty = self._hole_penalty * (
-            hole_penalty + (self._compute_potential(holes_val, self._last_holes))
-        )
-        skyline_penalty = self._skyline_penalty * (
-            skyline_penalty + (self._compute_potential(skyline_val, self._last_skyline))
-        )
-        bumpy_penalty = self._bumpy_penalty * (
-            bumpy_penalty + (self._compute_potential(bumpy_val, self._last_bumpy))
-        )
+        b2b_reward = self._b2b_reward * (self._gamma * b2b_val - self._last_b2b)
+        combo_reward = self._combo_reward * (self._gamma * combo_val - self._last_combo)
+        height_penalty = self._height_penalty * (self._gamma * heights_val - self._last_heights)
+        hole_penalty = self._hole_penalty * (self._gamma * holes_val - self._last_holes)
+        skyline_penalty = self._skyline_penalty * (self._gamma * skyline_val - self._last_skyline)
+        bumpy_penalty = self._bumpy_penalty * (self._gamma * bumpy_val - self._last_bumpy)
 
         attack_reward = self._attack_reward * attack
         spin_reward = self._spin_reward if is_spin else 0.0
@@ -298,9 +275,6 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         death_penalty = self._death_penalty if died else 0.0
 
         queue = self._fill_queue(queue)
-
-        # Get board stats AFTER garbage
-        heights_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
 
         # Update state
         self._board = board
@@ -687,10 +661,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         return heights
 
-    def _get_holes(self, board: np.ndarray, heights: np.ndarray) -> np.ndarray:
-        # Count holes in the board
-        holes = heights - np.sum(board, axis=0)
-        return holes
+    def _get_holes(self, board: np.ndarray) -> int:
+        # Count enclosed holes in the board
+        return self._hole_finder.count_holes(board)
 
     def _get_skyline(self, heights: np.ndarray) -> float:
         # Computes the difference between the hightest columns and lowest columns
@@ -711,8 +684,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         heights_val = np.max(heights)
 
         # Get number of holes in the board
-        holes = self._get_holes(board, heights)
-        holes_val = np.sum(holes)
+        holes_val = self._get_holes(board)
 
         # Get skyline of the board
         skyline_val = self._get_skyline(heights)
