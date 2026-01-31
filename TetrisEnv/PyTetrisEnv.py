@@ -111,8 +111,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 maximum=7,
                 name="pieces",
             ),
-            "b2b_combo": array_spec.ArraySpec(
-                shape=(2,), dtype=np.float32, name="b2b_combo"
+            "b2b_combo_garbage": array_spec.ArraySpec(
+                shape=(3,), dtype=np.float32, name="b2b_combo"
             ),
             "sequences": array_spec.ArraySpec(
                 shape=(160, max_len), dtype=np.int64, name="sequences"
@@ -385,7 +385,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
     def _create_observation(self) -> Dict[str, np.ndarray]:
         pieces = [self._active_piece.piece_type, self._hold_piece] + self._queue
         pieces = np.array([piece.value for piece in pieces], dtype=np.int64)
-        stats = np.array([self._scorer._b2b, self._scorer._combo], dtype=np.float32)
+
+        total_garbage = self._get_total_garbage()
+        stats = np.array([self._scorer._b2b, self._scorer._combo, total_garbage], dtype=np.float32)
 
         if self._pathfinding:
             non_hold_sequences = self._key_sequence_finder.find_all(
@@ -414,7 +416,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             "board": self._board[..., None],
             "vis_board": self._vis_board[..., None],
             "pieces": pieces,
-            "b2b_combo": stats,
+            "b2b_combo_garbage": stats,
             "sequences": sequences,
         }
 
@@ -643,16 +645,19 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         lines_to_remove = int(attack_amount)
 
         while lines_to_remove > 0 and self._garbage_queue:
-            num_rows, empty_column = self._garbage_queue[0]
+            num_garbage_rows, empty_column = self._garbage_queue[0]
 
-            if num_rows <= lines_to_remove:
+            if num_garbage_rows <= lines_to_remove:
                 # Remove entire garbage instance
-                lines_to_remove -= num_rows
+                lines_to_remove -= num_garbage_rows
                 self._garbage_queue.pop(0)
             else:
                 # Partially reduce garbage instance
-                self._garbage_queue[0] = (num_rows - lines_to_remove, empty_column)
+                self._garbage_queue[0] = (num_garbage_rows - lines_to_remove, empty_column)
                 lines_to_remove = 0
+
+    def _get_total_garbage(self) -> int:
+        return sum([num_garbage_rows for num_garbage_rows, _ in self._garbage_queue])
 
     def _get_heights(self, board: np.ndarray) -> np.ndarray:
         # Get heights of each column in the board

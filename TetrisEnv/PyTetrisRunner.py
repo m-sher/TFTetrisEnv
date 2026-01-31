@@ -102,11 +102,11 @@ class PyTetrisRunner:
             dynamic_size=False,
             element_shape=(self._num_envs, self._queue_size + 2),
         )
-        all_b2b_combo = tf.TensorArray(
+        all_b2b_combo_garbage = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
             dynamic_size=False,
-            element_shape=(self._num_envs, 2),
+            element_shape=(self._num_envs, 3),
         )
         all_actions = tf.TensorArray(
             dtype=tf.int64,
@@ -224,7 +224,7 @@ class PyTetrisRunner:
         for t in range(self._num_steps):
             board = time_step.observation["board"]
             pieces = time_step.observation["pieces"]
-            b2b_combo = time_step.observation["b2b_combo"]
+            b2b_combo_garbage = time_step.observation["b2b_combo_garbage"]
             valid_sequences = time_step.observation["sequences"]
 
             # Render the frame
@@ -244,14 +244,14 @@ class PyTetrisRunner:
 
             if self._pathfinding:
                 key_sequence, log_probs, masks, _ = self.p_model.predict(
-                    (board, pieces, b2b_combo), valid_sequences=valid_sequences, temperature=self._temperature
+                    (board, pieces, b2b_combo_garbage), valid_sequences=valid_sequences, temperature=self._temperature
                 )
             else:
                 key_sequence, log_probs, masks, _ = self.p_model.predict(
-                    (board, pieces, b2b_combo), valid_sequences=Convert.tf_to_sequences[None, ...], temperature=self._temperature
+                    (board, pieces, b2b_combo_garbage), valid_sequences=Convert.tf_to_sequences[None, ...], temperature=self._temperature
                 )
 
-            values = self.v_model.predict((board, pieces, b2b_combo))
+            values = self.v_model.predict((board, pieces, b2b_combo_garbage))
 
             time_step = self.env.step(key_sequence)
 
@@ -274,7 +274,7 @@ class PyTetrisRunner:
             # Store the data
             all_boards = all_boards.write(t, board)
             all_pieces = all_pieces.write(t, pieces)
-            all_b2b_combo = all_b2b_combo.write(t, b2b_combo)
+            all_b2b_combo_garbage = all_b2b_combo_garbage.write(t, b2b_combo_garbage)
             all_actions = all_actions.write(t, key_sequence)
             all_log_probs = all_log_probs.write(t, log_probs)
             all_masks = all_masks.write(t, masks)
@@ -299,12 +299,12 @@ class PyTetrisRunner:
         # bootstrap
         board = time_step.observation["board"]
         pieces = time_step.observation["pieces"]
-        b2b_combo = time_step.observation["b2b_combo"]
-        all_last_values = self.v_model.predict((board, pieces, b2b_combo))
+        b2b_combo_garbage = time_step.observation["b2b_combo_garbage"]
+        all_last_values = self.v_model.predict((board, pieces, b2b_combo_garbage))
 
         all_boards = all_boards.stack()
         all_pieces = all_pieces.stack()
-        all_b2b_combo = all_b2b_combo.stack()
+        all_b2b_combo_garbage = all_b2b_combo_garbage.stack()
         all_actions = all_actions.stack()
         all_log_probs = all_log_probs.stack()
         all_masks = all_masks.stack()
@@ -326,7 +326,7 @@ class PyTetrisRunner:
         return (
             all_boards,
             all_pieces,
-            all_b2b_combo,
+            all_b2b_combo_garbage,
             all_actions,
             all_log_probs,
             all_masks,
