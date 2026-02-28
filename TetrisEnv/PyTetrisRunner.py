@@ -150,61 +150,19 @@ class PyTetrisRunner:
             dynamic_size=False,
             element_shape=(self._num_envs,),
         )
-        all_b2b_reward = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_combo_reward = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_spin_reward = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_easy_clear_penalty = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_height_penalty = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_hole_penalty = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_skyline_penalty = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_bumpy_penalty = tf.TensorArray(
-            dtype=tf.float32,
-            size=self._num_steps,
-            dynamic_size=False,
-            element_shape=(self._num_envs,),
-        )
-        all_death_penalty = tf.TensorArray(
+        all_total_reward = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
             dynamic_size=False,
             element_shape=(self._num_envs,),
         )
         all_dones = tf.TensorArray(
+            dtype=tf.float32,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, 1),
+        )
+        all_garbage_pushed = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
             dynamic_size=False,
@@ -259,15 +217,8 @@ class PyTetrisRunner:
             attack = reward["attack"]
             clear = reward["clear"]
             attack_reward = reward["attack_reward"]
-            b2b_reward = reward["b2b_reward"]
-            combo_reward = reward["combo_reward"]
-            spin_reward = reward["spin_reward"]
-            easy_clear_penalty = reward["easy_clear_penalty"]
-            height_penalty = reward["height_penalty"]
-            hole_penalty = reward["hole_penalty"]
-            skyline_penalty = reward["skyline_penalty"]
-            bumpy_penalty = reward["bumpy_penalty"]
-            death_penalty = reward["death_penalty"]
+            total_reward = reward["total_reward"]
+            garbage_pushed = reward["garbage_pushed"][..., None]
 
             dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
@@ -284,17 +235,10 @@ class PyTetrisRunner:
             all_attacks = all_attacks.write(t, attack)
             all_clears = all_clears.write(t, clear)
             all_attack_reward = all_attack_reward.write(t, attack_reward)
-            all_b2b_reward = all_b2b_reward.write(t, b2b_reward)
-            all_combo_reward = all_combo_reward.write(t, combo_reward)
-            all_spin_reward = all_spin_reward.write(t, spin_reward)
-            all_easy_clear_penalty = all_easy_clear_penalty.write(t, easy_clear_penalty)
-            all_height_penalty = all_height_penalty.write(t, height_penalty)
-            all_hole_penalty = all_hole_penalty.write(t, hole_penalty)
-            all_skyline_penalty = all_skyline_penalty.write(t, skyline_penalty)
-            all_bumpy_penalty = all_bumpy_penalty.write(t, bumpy_penalty)
-            all_death_penalty = all_death_penalty.write(t, death_penalty)
+            all_total_reward = all_total_reward.write(t, total_reward)
 
             all_dones = all_dones.write(t, dones)
+            all_garbage_pushed = all_garbage_pushed.write(t, garbage_pushed)
 
         # bootstrap
         board = time_step.observation["board"]
@@ -312,16 +256,9 @@ class PyTetrisRunner:
         all_attacks = all_attacks.stack()
         all_clears = all_clears.stack()
         all_attack_reward = all_attack_reward.stack()
-        all_b2b_reward = all_b2b_reward.stack()
-        all_combo_reward = all_combo_reward.stack()
-        all_spin_reward = all_spin_reward.stack()
-        all_easy_clear_penalty = all_easy_clear_penalty.stack()
-        all_height_penalty = all_height_penalty.stack()
-        all_hole_penalty = all_hole_penalty.stack()
-        all_skyline_penalty = all_skyline_penalty.stack()
-        all_bumpy_penalty = all_bumpy_penalty.stack()
-        all_death_penalty = all_death_penalty.stack()
+        all_total_reward = all_total_reward.stack()
         all_dones = all_dones.stack()
+        all_garbage_pushed = all_garbage_pushed.stack()
 
         return (
             all_boards,
@@ -335,14 +272,7 @@ class PyTetrisRunner:
             all_attacks,
             all_clears,
             all_attack_reward,
-            all_b2b_reward,
-            all_combo_reward,
-            all_spin_reward,
-            all_easy_clear_penalty,
-            all_height_penalty,
-            all_hole_penalty,
-            all_skyline_penalty,
-            all_bumpy_penalty,
-            all_death_penalty,
+            all_total_reward,
             all_dones,
+            all_garbage_pushed,
         )
