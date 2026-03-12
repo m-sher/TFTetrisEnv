@@ -30,6 +30,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_min: int = 0,
         garbage_max: int = 0,
         gamma: float = 0.99,
+        auto_push_garbage: bool = True,
+        auto_fill_queue: bool = True,
     ) -> None:
         self._attack_reward = 1.0
         self._b2b_coef = 1.5
@@ -51,6 +53,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._garbage_max = garbage_max
 
         self._gamma = gamma
+        self._auto_push_garbage = auto_push_garbage
+        self._auto_fill_queue = auto_fill_queue
 
         self._seed = seed
 
@@ -226,7 +230,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             self._remove_attack_from_garbage_queue(attack)
 
         garbage_pushed = False
-        if clear == 0:  # No lines were cleared
+        if self._auto_push_garbage and clear == 0:  # No lines were cleared
             board, vis_board, garbage_pushed = self._push_garbage_to_board(board, vis_board)
 
         # Check if new garbage should be added to queue
@@ -254,7 +258,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
  
         total_reward = attack_reward + shaping_reward + (self._death_penalty if died else 0.0)
 
-        queue = self._fill_queue(queue)
+        if self._auto_fill_queue:
+            queue = self._fill_queue(queue)
 
         # Update state
         self._board = board
