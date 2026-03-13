@@ -37,6 +37,8 @@
 // Max Queue Size
 #define QUEUE_CAPACITY 8192 // Generous buffer
 #define STATE_SPACE (BOARD_ROWS * BOARD_COLS * ROTATIONS)
+#define BASE_POSITIONS 80 // 4 rot * 10 cols * 2 spins
+#define MAX_LANDINGS 24  // Max distinct landing rows per base slot
 
 typedef struct {
     uint16_t row_masks[4]; 
@@ -399,6 +401,55 @@ bool check_immobility(const uint16_t* board, int board_height, int piece_type, i
      return true;
 }
 
+// -- Candidate collection for row tiers --
+
+typedef struct {
+    int count;
+    int landing_rows[MAX_LANDINGS];
+    int bfs_states[MAX_LANDINGS];
+} SlotCandidates;
+
+static void write_sequence(
+    const StateMeta* meta, int bfs_state, int is_hold,
+    int max_len, int64_t* out_row
+) {
+    int len = 0;
+    int path[STATE_SPACE];
+    int curr = bfs_state;
+
+    while(meta[curr].parent != -1) {
+        path[len++] = meta[curr].last_move;
+        curr = meta[curr].parent;
+    }
+
+    int p = 0;
+    out_row[p++] = KEY_START;
+    if (is_hold) out_row[p++] = KEY_HOLD;
+
+    for(int i=len-1; i>=0; i--) {
+        if (p < max_len) out_row[p++] = path[i];
+    }
+
+    if (p < max_len) out_row[p++] = KEY_HARD_DROP;
+    while(p < max_len) out_row[p++] = KEY_PAD;
+}
+
+static void sort_candidates(SlotCandidates* slot) {
+    int n = slot->count;
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (slot->landing_rows[j] < slot->landing_rows[i]) {
+                int tmp_r = slot->landing_rows[i];
+                slot->landing_rows[i] = slot->landing_rows[j];
+                slot->landing_rows[j] = tmp_r;
+                int tmp_s = slot->bfs_states[i];
+                slot->bfs_states[i] = slot->bfs_states[j];
+                slot->bfs_states[j] = tmp_s;
+            }
+        }
+    }
+}
+
 // -- Main BFS --
 
 void find_sequences_c(
@@ -410,27 +461,27 @@ void find_sequences_c(
     const int start_rot,
     const int max_len,
     const int is_hold,
-    int64_t* output_buffer // Array of size [80 * max_len]
+    const int num_row_tiers,
+    int64_t* output_buffer // Array of size [80 * num_row_tiers * max_len]
 ) {
     if (!initialized) init_pieces();
 
-    // Init state tracking
     static StateMeta meta[STATE_SPACE];
     static bool visited[STATE_SPACE];
     static int queue[QUEUE_CAPACITY];
-    static bool placement_filled[80]; // 4 rot * 10 cols * 2 spins
+    static SlotCandidates candidates[BASE_POSITIONS];
 
-    // Reset
-    // memset(visited, 0, sizeof(visited)); // Too slow? 1600 bytes is fast.
     for(int i=0; i<STATE_SPACE; i++) {
         visited[i] = false;
         meta[i].parent = -1;
     }
-    memset(placement_filled, 0, sizeof(placement_filled));
+    for(int i=0; i<BASE_POSITIONS; i++) {
+        candidates[i].count = 0;
+    }
     
     int start_state = encode_state(start_row, start_col, start_rot, piece_type);
     if (start_state == -1 || check_collision(board_rows, board_height, piece_type, start_rot, start_row, start_col)) {
-        return; // Invalid start
+        return;
     }
     
     int head = 0;
@@ -439,31 +490,27 @@ void find_sequences_c(
     queue[tail++] = start_state;
     visited[start_state] = true;
     meta[start_state].depth = 0;
-    meta[start_state].last_move = KEY_START; // Special
+    meta[start_state].last_move = KEY_START;
     meta[start_state].delta_r = 0;
     
     int max_seq = is_hold ? max_len : max_len - 1;
-    int max_depth = max_seq - 2; // - Start/Hold, - HardDrop
+    int max_depth = max_seq - 2;
     
     int visible_start = board_height - VISIBLE_ROWS;
     
     while(head != tail) {
         int curr_state = queue[head++];
-        head %= QUEUE_CAPACITY; // Circular
+        head %= QUEUE_CAPACITY;
         
         int r, c, rot;
         decode_state(curr_state, &r, &c, &rot, piece_type);
         int depth = meta[curr_state].depth;
         
-        // 1. Try Hard Drop (Placement)
         int land_r = hard_drop_row(board_rows, board_height, piece_type, rot, r, c);
         
-        // Valid placement?
         if (land_r >= visible_start && land_r < visible_start + VISIBLE_ROWS) {
-            // Check spin
             bool is_spin = false;
             
-            // Mirror Python `_state_is_spin`: spin only if last move was a rotation (delta_r != 0)
             if (meta[curr_state].delta_r != 0) {
                  if (piece_type == PIECE_T) {
                      int delta_sum = abs(meta[curr_state].delta_row) + abs(meta[curr_state].delta_col);
@@ -471,50 +518,28 @@ void find_sequences_c(
                                          meta[curr_state].last_move, delta_sum);
                  } else {
                      if (check_immobility(board_rows, board_height, piece_type, rot, land_r, c)) {
-                         is_spin = true; // Counts as spin (mini) for non-T if immobile after rotation
+                         is_spin = true;
                      }
                  }
             }
             
-            // Output Index
-            // idx = rot * 10 * 2 + col * 2 + is_spin
             int norm_col = c + PIECES[piece_type].orientations[rot].min_col;
-            int idx = rot * BOARD_COLS * SPIN_STATES + norm_col * SPIN_STATES + (is_spin ? 1 : 0);
+            int base_idx = rot * BOARD_COLS * SPIN_STATES + norm_col * SPIN_STATES + (is_spin ? 1 : 0);
             
-            if (!placement_filled[idx]) {
-                // Reconstruct Path
-                int len = 0;
-                int path[STATE_SPACE]; // temp buffer
-                int curr = curr_state;
-                
-                while(meta[curr].parent != -1) {
-                     path[len++] = meta[curr].last_move;
-                     curr = meta[curr].parent;
-                }
-                
-                // Write to output
-                // format: [START, (HOLD?), ...keys..., HARD_DROP, PAD...]
-                int out_idx = idx * max_len;
-                int p = 0;
-                output_buffer[out_idx + p++] = KEY_START;
-                if (is_hold) output_buffer[out_idx + p++] = KEY_HOLD;
-                
-                // Path is reversed
-                for(int i=len-1; i>=0; i--) {
-                    if (p < max_len) output_buffer[out_idx + p++] = path[i];
-                }
-                
-                if (p < max_len) output_buffer[out_idx + p++] = KEY_HARD_DROP;
-                while(p < max_len) output_buffer[out_idx + p++] = KEY_PAD;
-                
-                placement_filled[idx] = true;
+            SlotCandidates* slot = &candidates[base_idx];
+            bool dup = false;
+            for (int i = 0; i < slot->count; i++) {
+                if (slot->landing_rows[i] == land_r) { dup = true; break; }
+            }
+            if (!dup && slot->count < MAX_LANDINGS) {
+                slot->landing_rows[slot->count] = land_r;
+                slot->bfs_states[slot->count] = curr_state;
+                slot->count++;
             }
         }
         
-        // 2. Expand Neighbors
         if (depth >= max_depth) continue;
         
-        // Moves: L, R, DAS_L, DAS_R, CW, CCW, 180, SD (Soft Drop)
         int moves[] = {KEY_TAP_LEFT, KEY_TAP_RIGHT, KEY_DAS_LEFT, KEY_DAS_RIGHT, 
                        KEY_CLOCKWISE, KEY_ANTICLOCKWISE, KEY_ROTATE_180, KEY_SOFT_DROP};
                        
@@ -534,7 +559,6 @@ void find_sequences_c(
                     nc++; valid = true; dcol=1;
                 }
             } else if (key == KEY_DAS_LEFT) {
-                // Keep moving left
                 int tmp = c;
                 while(!check_collision(board_rows, board_height, piece_type, rot, r, tmp-1)) {
                     tmp--;
@@ -551,37 +575,23 @@ void find_sequences_c(
                  int max_row = PIECES[piece_type].orientations[rot].max_row;
                  while(!check_collision(board_rows, board_height, piece_type, rot, tmp+1, c)) {
                      tmp++;
-                     if (tmp + max_row >= board_height - 1) break; // mirror Python early stop
+                     if (tmp + max_row >= board_height - 1) break;
                  }
                  if(tmp != r) { nr=tmp; valid=true; drow=nr-r; }
             } else {
-                // Rotations
                 int delta = 0;
                 if (key == KEY_CLOCKWISE) delta = 1;
-                else if (key == KEY_ANTICLOCKWISE) delta = 3; // -1 mod 4
+                else if (key == KEY_ANTICLOCKWISE) delta = 3;
                 else delta = 2;
                 
                 int next_rot = (rot + delta) % 4;
                 
-                // Basic check
                 if (!check_collision(board_rows, board_height, piece_type, next_rot, r, c)) {
                     nrot = next_rot; valid = true; dr = (delta==3)?-1:delta;
                 } else {
-                    // Kicks
-                    // Determine kick table
-                    int8_t (*table)[2]; // Pointer to array of 5 [dr,dc]
-                    // Let's check init.
-                    // Kicks are stored in 4x4x5.
+                    int8_t (*table)[2];
                     if (piece_type == PIECE_I) table = I_KICKS[rot][next_rot];
                     else table = KICKS[rot][next_rot];
-                    
-                    // Python code for standard kicks has 4 or 5?
-                    // Py `kick_piece`: iterates over table.
-                    // My KICKS init has 4 for standard (0-1, etc) but 5 for 180.
-                    // So I should check how many are populated.
-                    // Actually, standard SRS usually has 5. Python `RotationSystem` has 4 entries for standard.
-                    // BUT (0,0) is implicit first try.
-                    // Since I already tried (0,0) above ("Basic check"), I only need to try the table entries.
                     
                     int count = 4;
                     if (key == KEY_ROTATE_180) count = 5;
@@ -589,8 +599,7 @@ void find_sequences_c(
                     for(int k=0; k<count; k++) {
                         int kdr = table[k][0];
                         int kdc = table[k][1];
-                        if (kdr == 0 && kdc == 0 && count == 5) continue; // Skip 0,0 if present?
-                        // My tables contain non-zero kicks.
+                        if (kdr == 0 && kdc == 0 && count == 5) continue;
                         
                         if (!check_collision(board_rows, board_height, piece_type, next_rot, r+kdr, c+kdc)) {
                             nr = r+kdr; nc = c+kdc; nrot = next_rot;
@@ -618,6 +627,40 @@ void find_sequences_c(
                     tail %= QUEUE_CAPACITY;
                 }
             }
+        }
+    }
+
+    // Post-process: select tier representatives and write sequences
+    int N = num_row_tiers;
+    for (int base = 0; base < BASE_POSITIONS; base++) {
+        SlotCandidates* slot = &candidates[base];
+        int K = slot->count;
+        if (K == 0) continue;
+
+        sort_candidates(slot);
+
+        int selected_indices[MAX_LANDINGS];
+        int num_selected;
+
+        if (K <= N) {
+            num_selected = K;
+            for (int i = 0; i < K; i++) selected_indices[i] = i;
+        } else {
+            num_selected = N;
+            for (int t = 0; t < N; t++) {
+                if (N == 1) {
+                    selected_indices[t] = 0;
+                } else {
+                    selected_indices[t] = (int)(0.5 + (double)t * (double)(K - 1) / (double)(N - 1));
+                }
+            }
+        }
+
+        for (int t = 0; t < num_selected; t++) {
+            int ci = selected_indices[t];
+            int out_slot = base * N + t;
+            write_sequence(meta, slot->bfs_states[ci], is_hold,
+                           max_len, &output_buffer[out_slot * max_len]);
         }
     }
 }

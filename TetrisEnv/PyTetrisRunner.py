@@ -27,6 +27,8 @@ class PyTetrisRunner:
         v_model: Any,
         temperature: float = 1.0,
         seed: int = 123,
+        num_sequences: int = 160,
+        num_row_tiers: int = 1,
     ) -> None:
         self._queue_size = queue_size
         self._max_len = max_len
@@ -34,6 +36,8 @@ class PyTetrisRunner:
         self._num_steps = num_steps
         self._num_envs = num_envs
         self._pathfinding = pathfinding
+        self._num_sequences = num_sequences
+        self._num_row_tiers = num_row_tiers
 
         self.p_model = p_model
         self.v_model = v_model
@@ -58,6 +62,7 @@ class PyTetrisRunner:
                 garbage_chance=garbage_chances[idx],
                 garbage_min=garbage_rows_min,
                 garbage_max=garbage_rows_max,
+                num_row_tiers=num_row_tiers,
             )
             for i in range(num_envs)
         ]
@@ -67,29 +72,8 @@ class PyTetrisRunner:
         self.env = TFPyEnvironment(ppy_env)
 
     def collect_trajectory(
-        self, render: bool = False
-    ) -> Tuple[
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor,
-        tf.Tensor
-    ]:
+        self, render: bool = False, progress: bool = False
+    ) -> Tuple[tf.Tensor, ...]:
         all_boards = tf.TensorArray(
             dtype=tf.float32,
             size=self._num_steps,
@@ -125,6 +109,18 @@ class PyTetrisRunner:
             size=self._num_steps,
             dynamic_size=False,
             element_shape=(self._num_envs, self._max_len, self._key_dim),
+        )
+        all_valid_sequences = tf.TensorArray(
+            dtype=tf.int64,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs, self._num_sequences, self._max_len),
+        )
+        all_action_indices = tf.TensorArray(
+            dtype=tf.int64,
+            size=self._num_steps,
+            dynamic_size=False,
+            element_shape=(self._num_envs,),
         )
         all_values = tf.TensorArray(
             dtype=tf.float32,
@@ -179,7 +175,12 @@ class PyTetrisRunner:
 
         time_step = self.env.reset()
 
-        for t in range(self._num_steps):
+        step_iter = range(self._num_steps)
+        if progress:
+            from tqdm import tqdm
+            step_iter = tqdm(step_iter, desc="Collecting", unit="step")
+
+        for t in step_iter:
             board = time_step.observation["board"]
             pieces = time_step.observation["pieces"]
             b2b_combo_garbage = time_step.observation["b2b_combo_garbage"]
@@ -209,6 +210,11 @@ class PyTetrisRunner:
                     (board, pieces, b2b_combo_garbage), valid_sequences=Convert.tf_to_sequences[None, ...], temperature=self._temperature
                 )
 
+            matches = tf.reduce_all(
+                tf.equal(key_sequence[:, None, :], valid_sequences), axis=-1
+            )
+            action_index = tf.argmax(tf.cast(matches, tf.int64), axis=-1)
+
             values = self.v_model.predict((board, pieces, b2b_combo_garbage))
 
             time_step = self.env.step(key_sequence)
@@ -222,13 +228,14 @@ class PyTetrisRunner:
 
             dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
-            # Store the data
             all_boards = all_boards.write(t, board)
             all_pieces = all_pieces.write(t, pieces)
             all_b2b_combo_garbage = all_b2b_combo_garbage.write(t, b2b_combo_garbage)
             all_actions = all_actions.write(t, key_sequence)
             all_log_probs = all_log_probs.write(t, log_probs)
             all_masks = all_masks.write(t, masks)
+            all_valid_sequences = all_valid_sequences.write(t, valid_sequences)
+            all_action_indices = all_action_indices.write(t, action_index)
             all_values = all_values.write(t, values)
 
             # Store the penalties and rewards
@@ -252,6 +259,8 @@ class PyTetrisRunner:
         all_actions = all_actions.stack()
         all_log_probs = all_log_probs.stack()
         all_masks = all_masks.stack()
+        all_valid_sequences = all_valid_sequences.stack()
+        all_action_indices = all_action_indices.stack()
         all_values = all_values.stack()
         all_attacks = all_attacks.stack()
         all_clears = all_clears.stack()
@@ -267,6 +276,8 @@ class PyTetrisRunner:
             all_actions,
             all_log_probs,
             all_masks,
+            all_valid_sequences,
+            all_action_indices,
             all_values,
             all_last_values,
             all_attacks,

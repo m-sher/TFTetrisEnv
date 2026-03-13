@@ -10,8 +10,9 @@ from .Pieces import Piece
 from .Moves import Keys
 
 class CKeySequenceFinder(KeySequenceFinder):
-    def __init__(self, rotation_system=None):
+    def __init__(self, rotation_system=None, num_row_tiers: int = 1):
         super().__init__(rotation_system)
+        self._num_row_tiers = num_row_tiers
         
         # Load Library
         curr_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +39,9 @@ class CKeySequenceFinder(KeySequenceFinder):
             self._lib = None
             
         if self._lib:
-            # void find_sequences_c(...)
             self._lib.find_sequences_c.argtypes = [
                 np.ctypeslib.ndpointer(dtype=np.uint16, ndim=1, flags='C_CONTIGUOUS'),
+                ctypes.c_int,
                 ctypes.c_int,
                 ctypes.c_int,
                 ctypes.c_int,
@@ -78,12 +79,9 @@ class CKeySequenceFinder(KeySequenceFinder):
             
         board_height = board.shape[0]
         
-        # Prepare Output
-        # Size: 4 rotations * 10 cols * 2 spins = 80 positions
-        total_positions = 80
+        total_positions = 80 * self._num_row_tiers
         output_buffer = np.full(total_positions * max_len, Keys.PAD, dtype=np.int64)
         
-        # Call C
         self._lib.find_sequences_c(
             mask_rows,
             board_height,
@@ -93,10 +91,10 @@ class CKeySequenceFinder(KeySequenceFinder):
             int(piece.r),
             max_len,
             int(is_hold),
+            self._num_row_tiers,
             output_buffer
         )
         
-        # Reshape
         sequences_array = output_buffer.reshape((total_positions, max_len))
         
         if return_timing:

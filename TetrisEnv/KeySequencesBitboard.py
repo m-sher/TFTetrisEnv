@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional, Tuple
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -18,9 +19,15 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
     _BOARD_COLS = 10
     _ROTATIONS = 4
     _SPIN_STATES = 2
+    _BASE_POSITIONS = _ROTATIONS * _BOARD_COLS * _SPIN_STATES
 
-    def __init__(self, rotation_system: RotationSystem | None = None) -> None:
+    def __init__(
+        self,
+        rotation_system: RotationSystem | None = None,
+        num_row_tiers: int = 1,
+    ) -> None:
         super().__init__(rotation_system)
+        self._num_row_tiers = num_row_tiers
         self._bitpiece_cache: Dict[PieceType, Dict[str, np.ndarray]] = {}
         self._col_bits = (
             np.uint16(1) << np.arange(self._BOARD_COLS, dtype=np.uint16)
@@ -37,6 +44,7 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         self._validate_board(board)
 
         t_start = time.perf_counter()
+        N = self._num_row_tiers
 
         rotation_system = self._rotation_system
         start_piece = self._copy_piece(piece)
@@ -64,17 +72,17 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         state_count = board_rows * board_cols * self._ROTATIONS
         visible_start = board_rows - self._VISIBLE_ROWS
         visible_end = visible_start + self._VISIBLE_ROWS
-        total_positions = self._ROTATIONS * board_cols * self._SPIN_STATES
 
         visited = np.zeros(state_count, dtype=np.bool_)
         parents = np.full(state_count, -1, dtype=np.int64)
         parent_keys = np.full(state_count, -1, dtype=np.int16)
         depths = np.full(state_count, -1, dtype=np.int16)
         queue = np.empty(state_count, dtype=np.int64)
-        filled_slots = np.zeros(total_positions, dtype=np.bool_)
         last_delta_r = np.zeros(state_count, dtype=np.int8)
         last_delta_row = np.zeros(state_count, dtype=np.int16)
         last_delta_col = np.zeros(state_count, dtype=np.int16)
+
+        candidates: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
 
         piece_type = start_piece.piece_type
         kick_table = (
@@ -145,18 +153,17 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                         delta_row=delta_row,
                         delta_col=delta_col,
                     )
-                    idx = self._placement_index(
+                    base_idx = self._placement_index(
                         current_rotation,
                         current_col,
                         board_cols,
                         min_col_offsets,
                         is_spin,
                     )
-                    if idx is not None and not filled_slots[idx]:
-                        padded = np.full(max_len, Keys.PAD, dtype=np.int64)
-                        padded[: len(sequence)] = sequence
-                        sequences_array[idx] = padded
-                        filled_slots[idx] = True
+                    if base_idx is not None:
+                        slot = candidates[base_idx]
+                        if not any(lr == drop_row for lr, _ in slot):
+                            slot.append((drop_row, current_state))
 
             if current_depth >= max_path_length:
                 continue
@@ -213,6 +220,20 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
                 queue[queue_tail] = next_state
                 queue_tail += 1
 
+        for base_idx, slot in candidates.items():
+            slot.sort(key=lambda x: x[0])
+            K = len(slot)
+            selected = self._select_tiers(K, N)
+            for tier, ci in enumerate(selected):
+                landing_row, bfs_state = slot[ci]
+                seq = self._materialize_sequence(
+                    bfs_state, parents, parent_keys, is_hold
+                )
+                out_idx = base_idx * N + tier
+                padded = np.full(max_len, Keys.PAD, dtype=np.int64)
+                padded[: len(seq)] = seq
+                sequences_array[out_idx] = padded
+
         timing = self._timing_dict(t_start)
         return (sequences_array, timing) if return_timing else sequences_array
 
@@ -265,28 +286,33 @@ class BitboardKeySequenceFinder(KeySequenceFinder):
         )
         return mask_rows
 
-    @staticmethod
-    def _empty_sequences_array(board: np.ndarray, max_len: int) -> np.ndarray:
-        rotations = BitboardKeySequenceFinder._ROTATIONS
-        kick_states = BitboardKeySequenceFinder._SPIN_STATES
+    def _empty_sequences_array(self, board: np.ndarray, max_len: int) -> np.ndarray:
         board_rows, board_cols = board.shape
 
         if max_len < 2:
             raise ValueError(
                 "max_len must be at least 2 to include START and HARD_DROP keys."
             )
-        if board_cols != BitboardKeySequenceFinder._BOARD_COLS:
+        if board_cols != self._BOARD_COLS:
             raise ValueError("Board must have exactly 10 columns.")
-        if board_rows < BitboardKeySequenceFinder._VISIBLE_ROWS:
+        if board_rows < self._VISIBLE_ROWS:
             raise ValueError("Board must have at least 20 rows.")
 
-        total_positions = rotations * board_cols * kick_states
+        total_positions = self._BASE_POSITIONS * self._num_row_tiers
         return np.full((total_positions, max_len), Keys.PAD, dtype=np.int64)
 
     @staticmethod
     def _timing_dict(t_start: float) -> Dict[str, float]:
         duration = time.perf_counter() - t_start
         return {"placements": 0.0, "paths": duration, "total": duration}
+
+    @staticmethod
+    def _select_tiers(K: int, N: int) -> List[int]:
+        if K <= N:
+            return list(range(K))
+        if N == 1:
+            return [0]
+        return [round(t * (K - 1) / (N - 1)) for t in range(N)]
 
     @staticmethod
     def _encode_state(

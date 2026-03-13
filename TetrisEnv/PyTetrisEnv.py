@@ -32,10 +32,12 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         gamma: float = 0.99,
         auto_push_garbage: bool = True,
         auto_fill_queue: bool = True,
+        num_row_tiers: int = 1,
     ) -> None:
         self._attack_reward = 1.0
-        self._b2b_coef = 1.5
+        self._b2b_coef = 2.0
         self._surge_coef = 1.0
+        self._combo_coef = 0.5
         self._safety_coef = 10.0
         self._hole_coef = 1.0
         self._skyline_coef = 0.1
@@ -47,6 +49,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._max_steps = max_steps
         self._max_len = max_len
         self._pathfinding = pathfinding
+        self._num_row_tiers = num_row_tiers
 
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
@@ -65,7 +68,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._vis_board = np.zeros((24, 10), dtype=np.int32)
 
         self._rotation_system = RotationSystem()
-        self._key_sequence_finder = CKeySequenceFinder(self._rotation_system)
+        self._key_sequence_finder = CKeySequenceFinder(self._rotation_system, num_row_tiers=num_row_tiers)
         self._hole_finder = CHoleFinder()
         self._scorer = Scorer()
 
@@ -112,7 +115,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 shape=(3,), dtype=np.float32, name="b2b_combo"
             ),
             "sequences": array_spec.ArraySpec(
-                shape=(160, max_len), dtype=np.int64, name="sequences"
+                shape=(160 * num_row_tiers, max_len), dtype=np.int64, name="sequences"
             ),
         }
 
@@ -149,11 +152,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         
         b2b_level = max(0.0, b2b)
         surge_lines = b2b_level if b2b_level >= 4 else 0
+        combo_level = max(0.0, combo)
 
         # Main goal (is to blow up and act like I don't know nobody ackackackackack)
         phi_target = (
             (self._b2b_coef * np.log(1 + b2b_level)) +
-            (self._surge_coef * 1.15 ** surge_lines - 1)
+            (self._surge_coef * 1.15 ** surge_lines - 1) +
+            (self._combo_coef * np.log(1 + combo_level))
         )
 
         # Survival
@@ -383,7 +388,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
             sequences = np.concatenate([non_hold_sequences, hold_sequences], axis=0)
         else:
-            sequences = np.zeros((160, self._max_len), dtype=np.int64)
+            sequences = np.zeros((160 * self._num_row_tiers, self._max_len), dtype=np.int64)
 
         observation = {
             "board": self._board[..., None],
