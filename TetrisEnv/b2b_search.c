@@ -119,6 +119,10 @@ typedef struct {
 static PieceDef B2B_PIECES[8];
 static bool b2b_initialized = false;
 
+// Last search result — read by the C game loop to avoid lossy action_idx decode.
+// b2b_search_c() writes this; b2b_run_eval_games() reads it.
+static Placement b2b_last_placement;
+
 // Kick tables: [from_rot][to_rot][kick_index][0=row, 1=col]
 static int8_t B2B_KICKS[4][4][5][2];
 static int8_t B2B_I_KICKS[4][4][5][2];
@@ -2226,7 +2230,7 @@ void b2b_search_c(
     Placement* best_pl = &depth0_placements[d0_idx];
     int is_hold = depth0_is_hold[d0_idx];
 
-    // Compute action index: hold * 80 + rot * 20 + norm_col * 2 + is_spin
+    // Compute action index: hold * 160 + rot * 40 + norm_col * 4 + spin_type
     int played_piece;
     if (!is_hold) {
         played_piece = active_piece;
@@ -2234,8 +2238,13 @@ void b2b_search_c(
         played_piece = (hold_piece != PIECE_N) ? hold_piece : queue[0];
     }
     int norm_col = best_pl->col + B2B_PIECES[played_piece].orientations[best_pl->rot].min_col;
-    int is_spin = (best_pl->spin_type != SPIN_NONE) ? 1 : 0;
-    *out_action_index = is_hold * 80 + best_pl->rot * 20 + norm_col * 2 + is_spin;
+    *out_action_index = is_hold * 160 + best_pl->rot * 40 + norm_col * 4 + best_pl->spin_type;
+
+    // Store full placement info for C game loop (avoids lossy action_idx round-trip)
+    b2b_last_placement.rot = best_pl->rot;
+    b2b_last_placement.col = best_pl->col;
+    b2b_last_placement.landing_row = best_pl->landing_row;
+    b2b_last_placement.spin_type = best_pl->spin_type;
 
     // Reconstruct key sequence
     BFSStateMeta* meta_src = is_hold ? depth0_meta_hold : depth0_meta_active;
@@ -2243,4 +2252,344 @@ void b2b_search_c(
 
     free(curr_beam);
     free(next_beam);
+}
+
+// ============================================================
+// Full Game Loop in C (for optimizer — no Python overhead)
+// ============================================================
+
+// --- TetrioRNG: exact replica of TetrioRandom.py ---
+
+typedef struct {
+    int64_t t;
+} TetrioRNG;
+
+static void rng_init(TetrioRNG* rng, int seed) {
+    int64_t t = seed % 2147483647;
+    if (t <= 0) t += 2147483646;
+    rng->t = t;
+}
+
+static int rng_next_int(TetrioRNG* rng) {
+    rng->t = (16807 * rng->t) % 2147483647;
+    return (int)rng->t;
+}
+
+static float rng_next_float(TetrioRNG* rng) {
+    return (float)(rng_next_int(rng) - 1) / 2147483646.0f;
+}
+
+// Tetromino order matching Python: [Z, L, O, S, I, J, T]
+static void rng_next_bag(TetrioRNG* rng, int* bag) {
+    int base[7] = {PIECE_Z, PIECE_L, PIECE_O, PIECE_S,
+                   PIECE_I, PIECE_J, PIECE_T};
+    memcpy(bag, base, sizeof(base));
+    // Fisher-Yates shuffle (matching Python's while i > 0 loop)
+    for (int i = 6; i > 0; i--) {
+        int j = (int)(rng_next_float(rng) * (i + 1));
+        int tmp = bag[i]; bag[i] = bag[j]; bag[j] = tmp;
+    }
+}
+
+// --- Simple xorshift RNG for garbage generation ---
+
+typedef struct {
+    uint32_t state;
+} SimpleRNG;
+
+static void srng_init(SimpleRNG* rng, uint32_t seed) {
+    rng->state = seed ? seed : 1;
+}
+
+static uint32_t srng_next(SimpleRNG* rng) {
+    uint32_t x = rng->state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rng->state = x;
+    return x;
+}
+
+static float srng_float(SimpleRNG* rng) {
+    return (float)(srng_next(rng) & 0x7FFFFFFF) / (float)0x7FFFFFFF;
+}
+
+// --- Piece queue (bag-based) ---
+
+#define BAG_SIZE 7
+#define MAX_QUEUE 16
+
+typedef struct {
+    TetrioRNG rng;
+    int bag[BAG_SIZE];
+    int bag_pos;
+    int queue[MAX_QUEUE];
+    int queue_len;
+    int queue_size;
+} PieceQueue;
+
+static void pq_init(PieceQueue* pq, int seed, int qsize) {
+    rng_init(&pq->rng, seed);
+    pq->bag_pos = BAG_SIZE; // force first bag generation
+    pq->queue_len = 0;
+    pq->queue_size = qsize;
+}
+
+static int pq_next_piece(PieceQueue* pq) {
+    if (pq->bag_pos >= BAG_SIZE) {
+        rng_next_bag(&pq->rng, pq->bag);
+        pq->bag_pos = 0;
+    }
+    return pq->bag[pq->bag_pos++];
+}
+
+static void pq_fill(PieceQueue* pq) {
+    while (pq->queue_len < pq->queue_size) {
+        pq->queue[pq->queue_len++] = pq_next_piece(pq);
+    }
+}
+
+static int pq_pop(PieceQueue* pq) {
+    if (pq->queue_len <= 0) return PIECE_N;
+    int piece = pq->queue[0];
+    for (int i = 0; i < pq->queue_len - 1; i++)
+        pq->queue[i] = pq->queue[i + 1];
+    pq->queue_len--;
+    return piece;
+}
+
+// --- Garbage queue ---
+
+#define MAX_GARB_ENTRIES 32
+
+typedef struct {
+    int rows;
+    int col;
+    int timer;
+} GarbEntry;
+
+static void garb_cancel(GarbEntry* gq, int* cnt, int attack) {
+    int rem = attack;
+    while (rem > 0 && *cnt > 0) {
+        if (gq[0].rows <= rem) {
+            rem -= gq[0].rows;
+            for (int i = 0; i < *cnt - 1; i++) gq[i] = gq[i + 1];
+            (*cnt)--;
+        } else {
+            gq[0].rows -= rem;
+            rem = 0;
+        }
+    }
+}
+
+static void garb_tick(GarbEntry* gq, int cnt) {
+    for (int i = 0; i < cnt; i++) {
+        if (gq[i].timer > 0) gq[i].timer--;
+    }
+}
+
+static bool garb_push_one(uint16_t* board, int bh, GarbEntry* gq, int* cnt) {
+    if (*cnt <= 0 || gq[0].timer > 0) return false;
+    uint16_t full = (1 << BOARD_COLS) - 1;
+    int rows = gq[0].rows;
+    int col = gq[0].col;
+    for (int r = 0; r < bh - rows; r++) board[r] = board[r + rows];
+    uint16_t garb_row = full & ~(1 << col);
+    for (int r = bh - rows; r < bh; r++) board[r] = garb_row;
+    for (int i = 0; i < *cnt - 1; i++) gq[i] = gq[i + 1];
+    (*cnt)--;
+    return true;
+}
+
+static void garb_push_all(uint16_t* board, int bh, GarbEntry* gq, int* cnt) {
+    while (garb_push_one(board, bh, gq, cnt)) {}
+}
+
+static int garb_total(const GarbEntry* gq, int cnt) {
+    int t = 0;
+    for (int i = 0; i < cnt; i++) t += gq[i].rows;
+    return t;
+}
+
+// --- Game config & result structs (exported) ---
+
+typedef struct {
+    int seed;
+    float garbage_chance;
+    int garbage_min;
+    int garbage_max;
+    int garbage_push_delay;
+} GameConfig;
+
+typedef struct {
+    int steps_completed;
+    int survived;
+    float total_attack;
+    int max_b2b;
+    int end_height;
+    float avg_height;
+    int max_height;
+} GameResult;
+
+// --- Game loop entry point ---
+
+void b2b_run_eval_games(
+    int num_games,
+    const GameConfig* configs,
+    int num_steps,
+    int search_depth,
+    int beam_width,
+    int queue_size,
+    GameResult* results
+) {
+    if (!b2b_initialized) b2b_init_pieces();
+
+    for (int g = 0; g < num_games; g++) {
+        GameConfig cfg = configs[g];
+        GameResult* res = &results[g];
+
+        // --- Init game state ---
+        uint16_t board[BOARD_ROWS];
+        memset(board, 0, sizeof(board));
+        int bh = 24; // standard board height
+
+        PieceQueue pq;
+        pq_init(&pq, cfg.seed, queue_size);
+        pq_fill(&pq);
+        int active_piece = pq_pop(&pq);
+        pq_fill(&pq);
+        int hold_piece = PIECE_N;
+        int b2b = -1, combo = -1;
+
+        SimpleRNG grng;
+        srng_init(&grng, (uint32_t)(cfg.seed * 7 + 12345));
+        GarbEntry gq[MAX_GARB_ENTRIES];
+        int gcnt = 0;
+
+        float total_attack = 0.0f;
+        int max_b2b_val = 0;
+        float height_sum = 0.0f;
+        int last_height = 0, peak_height = 0;
+        int steps_done = 0;
+        bool died = false;
+
+        for (int step = 0; step < num_steps; step++) {
+            if (b2b > max_b2b_val) max_b2b_val = b2b;
+
+            int tg = garb_total(gq, gcnt);
+
+            // --- Beam search (reuses b2b_search_c — sequence is discarded) ---
+            int action_idx;
+            int64_t dummy_seq[15];
+            b2b_search_c(
+                board, bh, active_piece, hold_piece,
+                pq.queue, pq.queue_len, b2b, combo, tg,
+                search_depth, beam_width, 15,
+                &action_idx, dummy_seq
+            );
+
+            if (action_idx < 0) { died = true; break; }
+
+            // --- Read placement directly from b2b_search_c's result ---
+            // (avoids lossy action_idx round-trip — preserves BFS landing row)
+            int is_hold   = action_idx / 160;
+            int rot       = b2b_last_placement.rot;
+            int col       = b2b_last_placement.col;
+            int lr        = b2b_last_placement.landing_row;
+            int spin_type = b2b_last_placement.spin_type;
+
+            // Determine played piece & update hold/queue
+            int played;
+            if (!is_hold) {
+                played = active_piece;
+                active_piece = pq_pop(&pq);
+            } else if (hold_piece != PIECE_N) {
+                played = hold_piece;
+                hold_piece = active_piece;
+                active_piece = pq_pop(&pq);
+            } else {
+                hold_piece = active_piece;
+                played = pq_pop(&pq);
+                active_piece = pq_pop(&pq);
+            }
+            pq_fill(&pq);
+
+            // --- Apply placement ---
+            lock_piece_on_board(board, bh, played, rot, lr, col);
+            int clears = clear_lines(board, bh);
+
+            bool pc = true;
+            for (int r = 0; r < bh; r++) {
+                if (board[r] != 0) { pc = false; break; }
+            }
+
+            AttackResult ar = compute_attack(clears, spin_type, b2b, combo, pc);
+            total_attack += ar.attack;
+            b2b = ar.new_b2b;
+            combo = ar.new_combo;
+
+            // --- Garbage handling ---
+            if (ar.attack > 0) garb_cancel(gq, &gcnt, (int)ar.attack);
+
+            if (clears == 0) {
+                garb_tick(gq, gcnt);
+                garb_push_one(board, bh, gq, &gcnt); // one tier per step
+            }
+
+            // Generate new garbage
+            if (cfg.garbage_chance > 0.0f && cfg.garbage_max > 0) {
+                if (srng_float(&grng) <= cfg.garbage_chance) {
+                    int nr;
+                    if (cfg.garbage_min == cfg.garbage_max) {
+                        nr = cfg.garbage_min;
+                    } else {
+                        nr = cfg.garbage_min +
+                             (int)(srng_float(&grng) *
+                                   (cfg.garbage_max - cfg.garbage_min + 1));
+                        if (nr > cfg.garbage_max) nr = cfg.garbage_max;
+                    }
+                    if (nr > 0 && gcnt < MAX_GARB_ENTRIES) {
+                        int gap = (int)(srng_float(&grng) * BOARD_COLS);
+                        if (gap >= BOARD_COLS) gap = BOARD_COLS - 1;
+                        gq[gcnt].rows = nr;
+                        gq[gcnt].col = gap;
+                        gq[gcnt].timer = cfg.garbage_push_delay;
+                        gcnt++;
+                    }
+                }
+            }
+
+            // Immediate push for delay=0
+            if (cfg.garbage_push_delay == 0) {
+                garb_push_all(board, bh, gq, &gcnt);
+            }
+
+            // --- Track stats ---
+            int h = 0;
+            for (int r = 0; r < bh; r++) {
+                if (board[r] != 0) { h = bh - r; break; }
+            }
+            height_sum += (float)h;
+            last_height = h;
+            if (h > peak_height) peak_height = h;
+            steps_done++;
+
+            // --- Death check (rows 0..3 for bh=24) ---
+            for (int r = 0; r < bh - 20; r++) {
+                if (board[r] != 0) { died = true; break; }
+            }
+            if (died) break;
+        }
+
+        // Check final b2b
+        if (b2b > max_b2b_val) max_b2b_val = b2b;
+
+        res->steps_completed = steps_done;
+        res->survived = died ? 0 : 1;
+        res->total_attack = total_attack;
+        res->max_b2b = max_b2b_val;
+        res->end_height = died ? 20 : last_height;
+        res->avg_height = (steps_done > 0) ? height_sum / (float)steps_done : 0.0f;
+        res->max_height = peak_height;
+    }
 }

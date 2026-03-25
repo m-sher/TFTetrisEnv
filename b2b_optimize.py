@@ -9,23 +9,27 @@ Algorithm: Covariance Matrix Adaptation Evolution Strategy (CMA-ES)
   - Adapts step-size (sigma) automatically
 
 Fitness priorities (lexicographic):
-  1. Survival rate  (×10 000)
-  2. Max B2B streak (×   100)
-  3. Attack/piece   (×    10)
+  1. Survival rate          (×10 000)
+  2. Worst-case max B2B     (×   100)
+  3. Attack/piece           (×    10)
+  4. −Worst-case peak height (×  0.5)
   Minus L2 regularisation on log-deviation from baseline.
 
 Features:
+  - Full game loop in C (zero Python overhead per step)
   - Log-space optimisation (weights stay positive automatically)
   - L2 regularisation against baseline prevents explosion
   - Shared seeds per generation for fair candidate comparison
   - Baseline injected as candidate on generation 0
+  - Auto-resume from latest run (use --new to start fresh)
   - W&B or TensorBoard telemetry + JSON checkpointing
 
 Usage:
-  uv run python b2b_optimize.py
+  uv run python b2b_optimize.py                        # auto-resumes latest
+  uv run python b2b_optimize.py --new                   # force new run
   uv run python b2b_optimize.py --generations 50 --pop-size 20
   uv run python b2b_optimize.py --resume runs/b2b_opt_20240101_120000
-  uv run python b2b_optimize.py --logger tensorboard   # fallback to TB
+  uv run python b2b_optimize.py --logger tensorboard    # fallback to TB
 
 Logging:
   Default: Weights & Biases (wandb) — dashboards at wandb.ai
@@ -35,18 +39,15 @@ Logging:
 import numpy as np
 import sys
 import os
-import io
 import json
 import time
 import argparse
-import contextlib
 import multiprocessing as mp
 from pathlib import Path
 from datetime import datetime
 
 from b2b_test import set_weights, DEFAULTS
-from TetrisEnv.PyTetrisEnv import PyTetrisEnv
-from TetrisEnv.CB2BSearch import CB2BSearch
+from TetrisEnv.CB2BSearch import CB2BSearch, GameConfig, GameResult
 
 
 # ── Weight configuration ─────────────────────────────────────
@@ -65,120 +66,38 @@ def vec_to_dict(v):
     return {k: float(v[i]) for i, k in enumerate(WEIGHT_NAMES)}
 
 
-# ── Stdout suppression (hides PyTetrisEnv "Initialized Env" spam) ─
+# ── Candidate evaluation (C game loop) ───────────────────────
 
-@contextlib.contextmanager
-def suppress_stdout():
-    old = sys.stdout
-    sys.stdout = io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout = old
-
-
-# ── Game runner with B2B tracking ─────────────────────────────
-
-def run_eval_game(seed, num_steps=100, search_depth=4, beam_width=64,
-                  garbage_chance=0.15, garbage_min=1, garbage_max=4):
-    """Run one game, return stats dict including max_b2b."""
-    with suppress_stdout():
-        env = PyTetrisEnv(
-            queue_size=5, max_holes=None, max_height=20,
-            max_steps=None, max_len=15, pathfinding=False,
-            seed=seed, idx=0,
-            garbage_chance=garbage_chance, garbage_min=garbage_min,
-            garbage_max=garbage_max, auto_push_garbage=True,
-            auto_fill_queue=True,
-        )
-        env.reset()
+def evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps=100,
+             depth=4, beam_width=64):
+    """Evaluate a weight vector by running games entirely in C."""
+    set_weights(**vec_to_dict(weights_vec))
     searcher = CB2BSearch()
 
-    total_attack = 0.0
-    heights = []
-    max_b2b = 0
-    step = 0
-    game_over = False
-
-    for step in range(1, num_steps + 1):
-        if game_over:
-            break
-
-        b2b = env._scorer._b2b
-        if b2b > max_b2b:
-            max_b2b = b2b
-
-        board = env._board
-        active = env._active_piece.piece_type.value
-        hold = env._hold_piece.value
-        queue_arr = np.array([p.value for p in env._queue], dtype=np.int32)
-        combo = env._scorer._combo
-        total_garb = env._get_total_garbage()
-
-        action_idx, seq = searcher.search(
-            board=board, active_piece=active, hold_piece=hold,
-            queue=queue_arr, b2b=b2b, combo=combo,
-            total_garbage=total_garb, search_depth=search_depth,
-            beam_width=beam_width, max_len=15,
-        )
-
-        if action_idx < 0:
-            game_over = True
-            break
-
-        ts_result = env._step(seq)
-        total_attack += float(ts_result.reward["attack"])
-
-        h = 0
-        for r in range(24):
-            if np.any(env._board[r] != 0):
-                h = 24 - r
-                break
-        heights.append(h)
-
-        if ts_result.is_last():
-            game_over = True
-
-    end_height = heights[-1] if heights else 0
-    if game_over and not (step >= num_steps):
-        end_height = 20  # died → treat as max height
-
-    return {
-        "steps": step,
-        "survived": not game_over,
-        "total_attack": total_attack,
-        "attack_per_piece": total_attack / max(step, 1),
-        "avg_height": float(np.mean(heights)) if heights else 0.0,
-        "max_height": max(heights) if heights else 0,
-        "end_height": end_height,
-        "max_b2b": max_b2b,
-    }
-
-
-# ── Candidate evaluation ─────────────────────────────────────
-
-def evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps=100, depth=4):
-    """Full evaluation of a weight vector on shared seeds."""
-    set_weights(**vec_to_dict(weights_vec))
-    results = []
-
+    # Build game configs
+    configs = []
     for s in garb_seeds:
-        results.append(run_eval_game(
-            s, num_steps, depth,
-            garbage_chance=0.15, garbage_min=1, garbage_max=4))
-
+        configs.append(GameConfig(
+            seed=s, garbage_chance=0.15,
+            garbage_min=1, garbage_max=4, garbage_push_delay=1))
     for s in no_garb_seeds:
-        results.append(run_eval_game(
-            s, num_steps, depth,
-            garbage_chance=0.0, garbage_min=0, garbage_max=0))
+        configs.append(GameConfig(
+            seed=s, garbage_chance=0.0,
+            garbage_min=0, garbage_max=0, garbage_push_delay=1))
+
+    results = searcher.run_eval_games(
+        configs, num_steps=num_steps,
+        search_depth=depth, beam_width=beam_width)
 
     return {
-        'survival_rate':  float(np.mean([r['survived'] for r in results])),
-        'avg_max_b2b':    float(np.mean([r['max_b2b'] for r in results])),
-        'avg_app':        float(np.mean([r['attack_per_piece'] for r in results])),
-        'avg_height':     float(np.mean([r['avg_height'] for r in results])),
-        'avg_max_height': float(np.mean([r['max_height'] for r in results])),
-        'avg_end_height': float(np.mean([r['end_height'] for r in results])),
+        'survival_rate':  float(np.mean([r.survived for r in results])),
+        'min_max_b2b':    float(np.min([r.max_b2b for r in results])),
+        'avg_max_b2b':    float(np.mean([r.max_b2b for r in results])),
+        'avg_app':        float(np.mean([
+            r.total_attack / max(r.steps_completed, 1) for r in results])),
+        'avg_height':     float(np.mean([r.avg_height for r in results])),
+        'worst_max_height': float(np.max([r.max_height for r in results])),
+        'avg_end_height': float(np.mean([r.end_height for r in results])),
     }
 
 
@@ -188,16 +107,17 @@ def compute_fitness(metrics, weights_vec, reg_lambda):
     """
     Scalar fitness with lexicographic priorities + regularisation.
 
-    survive >> b2b >> app >> low end-height.  The 100× gaps between
-    tiers make them effectively lexicographic.  End-height penalty
-    sits within the APP tier as a tiebreaker that discourages
-    upstacking — a candidate with clean low boards beats one that
-    achieves the same APP at dangerous heights.
+    survive >> b2b >> app >> low peak-height.  The 100× gaps between
+    tiers make them effectively lexicographic.
+
+    Uses worst-case (min) b2b and worst-case (max) peak height
+    across games so that consistently good candidates beat those
+    that are brilliant on some seeds but terrible on others.
     """
     raw = (10000.0 * metrics['survival_rate']
-         +   100.0 * metrics['avg_max_b2b']
+         +   100.0 * metrics['min_max_b2b']
          +    10.0 * metrics['avg_app']
-         -     0.5 * metrics['avg_end_height'])
+         -     0.5 * metrics['worst_max_height'])
 
     # L2 regularisation in log-space against baseline
     log_dev = np.log(weights_vec + 1e-8) - np.log(BASELINE + 1e-8)
@@ -215,8 +135,8 @@ def _eval_worker(args):
     Each forked process has its own copy of the C extension's static
     globals, so set_weights() calls are process-safe with no locking.
     """
-    weights_vec, garb_seeds, no_garb_seeds, num_steps, depth, reg_lambda = args
-    m = evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps, depth)
+    weights_vec, garb_seeds, no_garb_seeds, num_steps, depth, beam_width, reg_lambda = args
+    m = evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps, depth, beam_width)
     f = compute_fitness(m, weights_vec, reg_lambda)
     return m, f
 
@@ -419,21 +339,39 @@ def main():
                     help='Path to run directory to resume from')
     ap.add_argument('--run-dir', type=str, default=None,
                     help='Explicit output directory (default: auto-timestamped)')
+    ap.add_argument('--new', action='store_true',
+                    help='Force a new run (default: auto-resume latest)')
     ap.add_argument('--workers', type=int, default=None,
                     help='Parallel workers (default: cpu_count)')
+    ap.add_argument('--beam-width', type=int, default=64,
+                    help='Beam width for search (default: 64)')
     ap.add_argument('--logger', choices=['wandb', 'tensorboard'],
                     default='wandb',
                     help='Logging backend (default: wandb)')
     args = ap.parse_args()
 
-    # ── Run directory ─────────────────────────────────────────
+    # ── Run directory (auto-resume by default) ─────────────────
     if args.resume:
         run_dir = Path(args.resume)
-    elif args.run_dir:
-        run_dir = Path(args.run_dir)
+    elif args.new or args.run_dir:
+        if args.run_dir:
+            run_dir = Path(args.run_dir)
+        else:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            run_dir = Path(f'runs/b2b_opt_{stamp}')
     else:
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        run_dir = Path(f'runs/b2b_opt_{stamp}')
+        # Auto-resume from latest run with a checkpoint
+        run_dir = None
+        runs_dir = Path('runs')
+        if runs_dir.exists():
+            candidates = sorted(runs_dir.glob('b2b_opt_*'))
+            for cand in reversed(candidates):
+                if (cand / 'checkpoint.json').exists():
+                    run_dir = cand
+                    break
+        if run_dir is None:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            run_dir = Path(f'runs/b2b_opt_{stamp}')
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Save args
@@ -462,7 +400,7 @@ def main():
     opt = CMAES(N, pop_size=args.pop_size, sigma0=args.sigma, rng_seed=args.seed)
     start_gen = 0
 
-    if args.resume and (run_dir / 'checkpoint.json').exists():
+    if (run_dir / 'checkpoint.json').exists() and not args.new:
         with open(run_dir / 'checkpoint.json') as f:
             opt.load_state(json.load(f))
         start_gen = opt.gen
@@ -495,9 +433,10 @@ def main():
         log_cands = opt.ask()
         real_cands = [opt.to_real(lc) for lc in log_cands]
 
-        # Build work items: (weights_vec, garb_seeds, no_garb_seeds, steps, depth, reg)
+        # Build work items
         work = [
-            (rv, g_seeds, n_seeds, args.steps, args.depth, args.reg)
+            (rv, g_seeds, n_seeds, args.steps, args.depth,
+             args.beam_width, args.reg)
             for rv in real_cands
         ]
 
@@ -546,18 +485,20 @@ def main():
             'fitness/gen_worst': float(np.min(fits)),
             'fitness/best_ever': opt.best_fit,
             # Best-in-gen metrics
-            'best/survival':   bm['survival_rate'],
-            'best/max_b2b':    bm['avg_max_b2b'],
-            'best/app':        bm['avg_app'],
-            'best/avg_height': bm['avg_height'],
-            'best/max_height': bm['avg_max_height'],
-            'best/end_height': bm['avg_end_height'],
+            'best/survival':     bm['survival_rate'],
+            'best/min_b2b':      bm['min_max_b2b'],
+            'best/avg_b2b':      bm['avg_max_b2b'],
+            'best/app':          bm['avg_app'],
+            'best/avg_height':   bm['avg_height'],
+            'best/worst_peak_h': bm['worst_max_height'],
+            'best/end_height':   bm['avg_end_height'],
             # Population-mean metrics
-            'mean/survival':   mm['survival_rate'],
-            'mean/max_b2b':    mm['avg_max_b2b'],
-            'mean/app':        mm['avg_app'],
-            'mean/avg_height': mm['avg_height'],
-            'mean/end_height': mm['avg_end_height'],
+            'mean/survival':     mm['survival_rate'],
+            'mean/min_b2b':      mm['min_max_b2b'],
+            'mean/avg_b2b':      mm['avg_max_b2b'],
+            'mean/app':          mm['avg_app'],
+            'mean/avg_height':   mm['avg_height'],
+            'mean/worst_peak_h': mm['worst_max_height'],
             # Optimiser internals
             'opt/sigma':       opt.sigma,
             'opt/cond_number': cond,
@@ -579,8 +520,8 @@ def main():
         marker = ' ★' if new_best else ''
         print(
             f'gen {gen:3d} │ fit {fits[bi]:8.1f} (μ {np.mean(fits):8.1f}) │ '
-            f'surv {bm["survival_rate"]:.0%}  b2b {bm["avg_max_b2b"]:4.1f}  '
-            f'app {bm["avg_app"]:.3f}  endH {bm["avg_end_height"]:4.1f} │ '
+            f'surv {bm["survival_rate"]:.0%}  b2b↓ {bm["min_max_b2b"]:4.1f}  '
+            f'app {bm["avg_app"]:.3f}  peakH↑ {bm["worst_max_height"]:4.1f} │ '
             f'σ {opt.sigma:.3f}  κ {cond:.0f} │ {dt:.0f}s{marker}'
         )
 
@@ -610,9 +551,9 @@ def main():
     bm = opt.best_met
     print(f'Best fitness : {opt.best_fit:.1f}')
     print(f'Survival     : {bm.get("survival_rate", 0):.0%}')
-    print(f'Max B2B      : {bm.get("avg_max_b2b", 0):.1f}')
+    print(f'Min B2B      : {bm.get("min_max_b2b", 0):.1f}')
     print(f'Attack/piece : {bm.get("avg_app", 0):.3f}')
-    print(f'End height   : {bm.get("avg_end_height", 0):.1f}')
+    print(f'Worst peak H : {bm.get("worst_max_height", 0):.1f}')
     print()
     print('Best weights (paste into b2b_test.py DEFAULTS):')
     print('DEFAULTS = dict(')

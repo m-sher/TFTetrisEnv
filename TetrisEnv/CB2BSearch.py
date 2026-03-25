@@ -2,7 +2,29 @@ import ctypes
 import numpy as np
 import os
 import glob
-from typing import Tuple
+from typing import Tuple, List
+
+
+class GameConfig(ctypes.Structure):
+    _fields_ = [
+        ('seed', ctypes.c_int),
+        ('garbage_chance', ctypes.c_float),
+        ('garbage_min', ctypes.c_int),
+        ('garbage_max', ctypes.c_int),
+        ('garbage_push_delay', ctypes.c_int),
+    ]
+
+
+class GameResult(ctypes.Structure):
+    _fields_ = [
+        ('steps_completed', ctypes.c_int),
+        ('survived', ctypes.c_int),
+        ('total_attack', ctypes.c_float),
+        ('max_b2b', ctypes.c_int),
+        ('end_height', ctypes.c_int),
+        ('avg_height', ctypes.c_float),
+        ('max_height', ctypes.c_int),
+    ]
 
 
 class CB2BSearch:
@@ -63,6 +85,18 @@ class CB2BSearch:
 
             self._lib.b2b_get_num_decompose.argtypes = []
             self._lib.b2b_get_num_decompose.restype = ctypes.c_int
+
+            # --- game-loop function ---
+            self._lib.b2b_run_eval_games.argtypes = [
+                ctypes.c_int,   # num_games
+                ctypes.c_void_p,  # configs (GameConfig*)
+                ctypes.c_int,   # num_steps
+                ctypes.c_int,   # search_depth
+                ctypes.c_int,   # beam_width
+                ctypes.c_int,   # queue_size
+                ctypes.c_void_p,  # results (GameResult*)
+            ]
+            self._lib.b2b_run_eval_games.restype = None
 
         self._col_bits = (
             np.uint16(1) << np.arange(10, dtype=np.uint16)
@@ -170,3 +204,37 @@ class CB2BSearch:
         )
 
         return buf[: n * self.NUM_DECOMPOSE].reshape(n, self.NUM_DECOMPOSE)
+
+    def run_eval_games(
+        self,
+        configs: List[GameConfig],
+        num_steps: int = 64,
+        search_depth: int = 4,
+        beam_width: int = 64,
+        queue_size: int = 5,
+    ) -> List[GameResult]:
+        """Run multiple evaluation games entirely in C.
+
+        Each GameConfig specifies seed + garbage parameters.
+        Returns a list of GameResult structs with stats.
+        """
+        if not self._lib:
+            raise RuntimeError("b2b_search C library not loaded")
+
+        n = len(configs)
+        ConfigArray = GameConfig * n
+        ResultArray = GameResult * n
+        cfgs = ConfigArray(*configs)
+        results = ResultArray()
+
+        self._lib.b2b_run_eval_games(
+            n,
+            ctypes.cast(cfgs, ctypes.c_void_p),
+            num_steps,
+            search_depth,
+            beam_width,
+            queue_size,
+            ctypes.cast(results, ctypes.c_void_p),
+        )
+
+        return list(results)
