@@ -66,42 +66,22 @@ def vec_to_dict(v):
     return {k: float(v[i]) for i, k in enumerate(WEIGHT_NAMES)}
 
 
-# ── Candidate evaluation (C game loop) ───────────────────────
+# ── Fitness helpers ───────────────────────────────────────────
 
-def evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps=100,
-             depth=4, beam_width=64):
-    """Evaluate a weight vector by running games entirely in C."""
-    set_weights(**vec_to_dict(weights_vec))
-    searcher = CB2BSearch()
-
-    # Build game configs
-    configs = []
-    for s in garb_seeds:
-        configs.append(GameConfig(
-            seed=s, garbage_chance=0.15,
-            garbage_min=1, garbage_max=4, garbage_push_delay=1))
-    for s in no_garb_seeds:
-        configs.append(GameConfig(
-            seed=s, garbage_chance=0.0,
-            garbage_min=0, garbage_max=0, garbage_push_delay=1))
-
-    results = searcher.run_eval_games(
-        configs, num_steps=num_steps,
-        search_depth=depth, beam_width=beam_width)
-
+def _aggregate_results(game_dicts):
+    """Aggregate per-game result dicts into candidate-level metrics."""
     return {
-        'survival_rate':  float(np.mean([r.survived for r in results])),
-        'min_max_b2b':    float(np.min([r.max_b2b for r in results])),
-        'avg_max_b2b':    float(np.mean([r.max_b2b for r in results])),
-        'avg_app':        float(np.mean([
-            r.total_attack / max(r.steps_completed, 1) for r in results])),
-        'avg_height':     float(np.mean([r.avg_height for r in results])),
-        'worst_max_height': float(np.max([r.max_height for r in results])),
-        'avg_end_height': float(np.mean([r.end_height for r in results])),
+        'survival_rate':    float(np.mean([r['survived'] for r in game_dicts])),
+        'min_max_b2b':      float(np.min([r['max_b2b'] for r in game_dicts])),
+        'avg_max_b2b':      float(np.mean([r['max_b2b'] for r in game_dicts])),
+        'avg_app':          float(np.mean([
+            r['total_attack'] / max(r['steps_completed'], 1)
+            for r in game_dicts])),
+        'avg_height':       float(np.mean([r['avg_height'] for r in game_dicts])),
+        'worst_max_height': float(np.max([r['max_height'] for r in game_dicts])),
+        'avg_end_height':   float(np.mean([r['end_height'] for r in game_dicts])),
     }
 
-
-# ── Fitness function ──────────────────────────────────────────
 
 def compute_fitness(metrics, weights_vec, reg_lambda):
     """
@@ -126,19 +106,35 @@ def compute_fitness(metrics, weights_vec, reg_lambda):
     return raw - reg
 
 
-# ── Parallel worker ──────────────────────────────────────────
+# ── Parallel worker (one game per task) ──────────────────────
 
-def _eval_worker(args):
+def _game_worker(args):
     """
-    Process-pool worker: evaluate one candidate.
+    Run a SINGLE game for one candidate.
 
-    Each forked process has its own copy of the C extension's static
-    globals, so set_weights() calls are process-safe with no locking.
+    Work is flattened to (candidate, game) pairs so that all CPUs
+    stay busy instead of only λ cores being used.
     """
-    weights_vec, garb_seeds, no_garb_seeds, num_steps, depth, beam_width, reg_lambda = args
-    m = evaluate(weights_vec, garb_seeds, no_garb_seeds, num_steps, depth, beam_width)
-    f = compute_fitness(m, weights_vec, reg_lambda)
-    return m, f
+    ci, weights_vec, seed, garb_chance, garb_min, garb_max, garb_delay, \
+        num_steps, depth, beam_width = args
+    set_weights(**vec_to_dict(weights_vec))
+    searcher = CB2BSearch()
+    cfg = GameConfig(seed=seed, garbage_chance=garb_chance,
+                     garbage_min=garb_min, garbage_max=garb_max,
+                     garbage_push_delay=garb_delay)
+    results = searcher.run_eval_games(
+        [cfg], num_steps=num_steps,
+        search_depth=depth, beam_width=beam_width)
+    r = results[0]
+    return ci, {
+        'survived': r.survived,
+        'max_b2b': r.max_b2b,
+        'total_attack': r.total_attack,
+        'steps_completed': r.steps_completed,
+        'avg_height': r.avg_height,
+        'max_height': r.max_height,
+        'end_height': r.end_height,
+    }
 
 
 # ── CMA-ES Optimiser ─────────────────────────────────────────
@@ -433,33 +429,43 @@ def main():
         log_cands = opt.ask()
         real_cands = [opt.to_real(lc) for lc in log_cands]
 
-        # Build work items
-        work = [
-            (rv, g_seeds, n_seeds, args.steps, args.depth,
-             args.beam_width, args.reg)
-            for rv in real_cands
-        ]
+        # Build flattened work items: one task per (candidate, game)
+        work = []
+        for ci, rv in enumerate(real_cands):
+            for s in g_seeds:
+                work.append((ci, rv, s, 0.15, 1, 4, 1,
+                             args.steps, args.depth, args.beam_width))
+            for s in n_seeds:
+                work.append((ci, rv, s, 0.0, 0, 0, 1,
+                             args.steps, args.depth, args.beam_width))
 
-        fits = np.empty(opt.lam)
-        mets = []
+        total_tasks = len(work)
+        results_by_cand = [[] for _ in range(opt.lam)]
 
         if pool is not None:
-            # Parallel: imap preserves order and lets us show progress
-            for i, (m, f) in enumerate(pool.imap(_eval_worker, work)):
-                fits[i] = f
-                mets.append(m)
-                sys.stderr.write(f'\r  gen {gen}  [{i + 1}/{opt.lam}]')
+            for done, (ci, r) in enumerate(
+                    pool.imap_unordered(_game_worker, work)):
+                results_by_cand[ci].append(r)
+                sys.stderr.write(
+                    f'\r  gen {gen}  [{done + 1}/{total_tasks} games]')
                 sys.stderr.flush()
         else:
-            # Sequential fallback (--workers 1)
-            for i, item in enumerate(work):
-                m, f = _eval_worker(item)
-                fits[i] = f
-                mets.append(m)
-                sys.stderr.write(f'\r  gen {gen}  [{i + 1}/{opt.lam}]')
+            for done, item in enumerate(work):
+                ci, r = _game_worker(item)
+                results_by_cand[ci].append(r)
+                sys.stderr.write(
+                    f'\r  gen {gen}  [{done + 1}/{total_tasks} games]')
                 sys.stderr.flush()
 
-        sys.stderr.write('\r' + ' ' * 40 + '\r')
+        sys.stderr.write('\r' + ' ' * 50 + '\r')
+
+        # Aggregate per candidate
+        fits = np.empty(opt.lam)
+        mets = []
+        for ci in range(opt.lam):
+            m = _aggregate_results(results_by_cand[ci])
+            mets.append(m)
+            fits[ci] = compute_fitness(m, real_cands[ci], args.reg)
 
         # Update distribution
         opt.tell(log_cands, fits)
