@@ -273,11 +273,144 @@ def draw_active_ghost(surface, env, ox, oy):
                              (x + 2, y + 2, CELL - 4, CELL - 4), 2, border_radius=3)
 
 
+# ── Headless runner ──────────────────────────────────────────
+def run_headless(args):
+    """Run the game without a GUI, printing per-turn stats to stdout."""
+    env = PyTetrisEnv(
+        queue_size=args.queue_size,
+        max_holes=None,
+        max_height=20,
+        max_steps=None,
+        max_len=15,
+        pathfinding=False,
+        seed=args.seed,
+        idx=0,
+        garbage_chance=args.garbage_chance,
+        garbage_min=args.garbage_min,
+        garbage_max=args.garbage_max,
+        garbage_push_delay=args.garbage_delay,
+        auto_push_garbage=True,
+        auto_fill_queue=True,
+    )
+    env.reset()
+    searcher = CB2BSearch()
+
+    total_attack = 0.0
+    max_b2b = 0
+    max_combo = 0
+    max_attack = 0.0
+    max_consec_attack = 0.0
+    cur_consec_attack = 0.0
+
+    hdr = (
+        f"{'Turn':>5}  {'B2B':>4}  {'Combo':>5}  {'Attack':>6}  "
+        f"{'MaxB2B':>6}  {'MaxCmb':>6}  {'MaxAtk':>6}  "
+        f"{'MaxCon':>6}  {'TotAtk':>7}  "
+        f"{'MaxHt':>5}  {'AvgHt':>5}"
+    )
+    print(hdr)
+    print("-" * len(hdr))
+
+    for step in range(1, args.num_steps + 1):
+        board = env._board
+        active = env._active_piece.piece_type.value
+        hold = env._hold_piece.value
+        queue_types = np.array([p.value for p in env._queue], dtype=np.int32)
+        b2b = env._scorer._b2b
+        combo = env._scorer._combo
+
+        total_garb = env._get_total_garbage()
+
+        action_idx, sequence = searcher.search(
+            board=board,
+            active_piece=active,
+            hold_piece=hold,
+            queue=queue_types,
+            b2b=b2b,
+            combo=combo,
+            total_garbage=total_garb,
+            garbage_push_delay=env._garbage_push_delay,
+            search_depth=args.search_depth,
+            beam_width=args.beam_width,
+            max_len=15,
+        )
+
+        if action_idx < 0:
+            print(f"\n** No valid move found at turn {step} — game over **")
+            break
+
+        ts = env._step(sequence)
+
+        atk = float(ts.reward["attack"])
+        total_attack += atk
+
+        # Track consecutive-attack streak
+        if atk > 0:
+            cur_consec_attack += atk
+        else:
+            max_consec_attack = max(max_consec_attack, cur_consec_attack)
+            cur_consec_attack = 0.0
+
+        cur_b2b = env._scorer._b2b
+        cur_combo = env._scorer._combo
+        max_b2b = max(max_b2b, cur_b2b)
+        max_combo = max(max_combo, cur_combo)
+        max_attack = max(max_attack, atk)
+
+        # Compute per-column heights
+        col_heights = np.zeros(env._board.shape[1], dtype=int)
+        for c in range(env._board.shape[1]):
+            for r in range(env._board.shape[0]):
+                if env._board[r, c] != 0:
+                    col_heights[c] = env._board.shape[0] - r
+                    break
+        max_height = int(col_heights.max())
+        avg_height = float(col_heights.mean())
+
+        print(
+            f"{step:>5}  {cur_b2b:>4}  {cur_combo:>5}  {atk:>6.0f}  "
+            f"{max_b2b:>6}  {max_combo:>6}  {max_attack:>6.0f}  "
+            f"{max(max_consec_attack, cur_consec_attack):>6.0f}  "
+            f"{total_attack:>7.0f}  "
+            f"{max_height:>5}  {avg_height:>5.1f}"
+        )
+
+        if ts.is_last():
+            print(f"\n** Game over at turn {step} **")
+            break
+
+    # Flush last streak
+    max_consec_attack = max(max_consec_attack, cur_consec_attack)
+
+    print()
+    print("=" * 40)
+    print(f"  Total turns:         {step}")
+    print(f"  Total attack:        {total_attack:.0f}")
+    print(f"  Max B2B reached:     {max_b2b}")
+    print(f"  Max combo reached:   {max_combo}")
+    print(f"  Max single attack:   {max_attack:.0f}")
+    print(f"  Max consec. attack:  {max_consec_attack:.0f}")
+    print(f"  Attack/piece:        {total_attack / max(step, 1):.3f}")
+    print("=" * 40)
+
+
 # ── Main ─────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="B2B Search GUI Demo")
     ap.add_argument('--weights', type=str, default=None,
                     help='Path to weights JSON (e.g. runs/b2b_opt_*/best_weights.json)')
+    ap.add_argument('--headless', action='store_true',
+                    help='Run without GUI, print per-turn stats to terminal')
+    ap.add_argument('--search-depth', type=int, default=4)
+    ap.add_argument('--beam-width', type=int, default=64)
+    ap.add_argument('--num-steps', type=int, default=200,
+                    help='Max turns to play (headless mode)')
+    ap.add_argument('--queue-size', type=int, default=5)
+    ap.add_argument('--garbage-chance', type=float, default=0.15)
+    ap.add_argument('--garbage-min', type=int, default=1)
+    ap.add_argument('--garbage-max', type=int, default=4)
+    ap.add_argument('--garbage-delay', type=int, default=1)
+    ap.add_argument('--seed', type=int, default=42)
     args = ap.parse_args()
 
     # Load weights (from JSON file, or use defaults)
@@ -289,6 +422,10 @@ def main():
     else:
         set_weights()  # apply b2b_test.py DEFAULTS
         print("Using default weights")
+
+    if args.headless:
+        run_headless(args)
+        return
 
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H))
@@ -410,6 +547,7 @@ def main():
             b2b=b2b,
             combo=combo,
             total_garbage=total_garb,
+            garbage_push_delay=env._garbage_push_delay,
             search_depth=sd,
             beam_width=bw,
             max_len=15,

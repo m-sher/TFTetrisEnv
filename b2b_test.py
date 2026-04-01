@@ -28,18 +28,19 @@ def _find_lib():
 
 
 _lib = ctypes.CDLL(_find_lib())
-_lib.b2b_set_weights.argtypes = [ctypes.c_float] * 19
+_lib.b2b_set_weights.argtypes = [ctypes.c_float] * 20
 _lib.b2b_set_weights.restype = None
 
 # Default weights (baseline)
 DEFAULTS = dict(
-    height=6.0, avg_height=1.5, bumpiness=1.2,
-    holes=4.0, hole_col=2.5, deep_holes=3.0,
-    clearable=2.5, b2b=100.0, combo=4.0,
-    b2b_break=18.0, spike=4.0, spin_setup=10.0,
-    tslot=8.0, immobile_clear=8.0, hole_ceiling=0.8,
-    wasted_hole=8.0, attack=5.0, app_bonus=0.0,
-    garb_cancel=4.0,
+    height=10.0, avg_height=5.0, bumpiness=0,
+    holes=0, hole_col=0, deep_holes=0.0,
+    clearable=0, b2b=10.0, combo=0,
+    b2b_break=1.0, spike=0.0, spin_setup=1.0,
+    tslot=2.0, immobile_clear=2.0, hole_ceiling=0.0,
+    wasted_hole=0.0, attack=10.0, app_bonus=0.0,
+    garb_cancel=0.0,
+    streak=0.0,
 )
 
 
@@ -52,7 +53,7 @@ def set_weights(**overrides):
         w["b2b_break"], w["spike"], w["spin_setup"],
         w["tslot"], w["immobile_clear"], w["hole_ceiling"],
         w["wasted_hole"], w["attack"], w["app_bonus"],
-        w["garb_cancel"],
+        w["garb_cancel"], w["streak"],
     )
 
 
@@ -90,7 +91,9 @@ def run_game(seed, num_steps=200, search_depth=4, beam_width=64,
         action_idx, sequence = searcher.search(
             board=board, active_piece=active, hold_piece=hold,
             queue=queue_types, b2b=b2b, combo=combo,
-            total_garbage=total_garb, search_depth=search_depth,
+            total_garbage=total_garb,
+            garbage_push_delay=env._garbage_push_delay,
+            search_depth=search_depth,
             beam_width=beam_width, max_len=15,
         )
 

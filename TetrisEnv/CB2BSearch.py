@@ -59,6 +59,8 @@ class CB2BSearch:
                 ctypes.c_int,  # b2b
                 ctypes.c_int,  # combo
                 ctypes.c_int,  # total_garbage
+                ctypes.c_int,  # garbage_push_delay
+                ctypes.c_int,  # bag_seen_init
                 ctypes.c_int,  # search_depth
                 ctypes.c_int,  # beam_width
                 ctypes.c_int,  # max_len
@@ -78,6 +80,7 @@ class CB2BSearch:
                 ctypes.c_int,  # b2b
                 ctypes.c_int,  # combo
                 ctypes.c_int,  # total_garbage
+                ctypes.c_int,  # garbage_push_delay
                 np.ctypeslib.ndpointer(dtype=np.float32, ndim=1, flags="C_CONTIGUOUS"),
                 ctypes.c_int,  # max_placements
             ]
@@ -102,14 +105,14 @@ class CB2BSearch:
             np.uint16(1) << np.arange(10, dtype=np.uint16)
         ).astype(np.uint16)
 
-        self.NUM_DECOMPOSE = 21
+        self.NUM_DECOMPOSE = 22
         self.COMPONENT_NAMES = [
             "height", "garb_cancel", "avg_height", "bumpiness",
             "holes", "deep_holes", "hole_ceiling", "wasted_holes",
             "hole_cols", "hole_forgive", "well",
             "b2b_flat", "b2b_log", "combo", "b2b_break",
             "tslot", "immobile_setup", "immobile_clear",
-            "spike", "attack", "app",
+            "spike", "attack", "app", "streak",
         ]
 
     def search(
@@ -121,6 +124,8 @@ class CB2BSearch:
         b2b: int,
         combo: int,
         total_garbage: int,
+        garbage_push_delay: int = 1,
+        bag_seen: int = 0,
         search_depth: int = 4,
         beam_width: int = 64,
         max_len: int = 15,
@@ -155,6 +160,8 @@ class CB2BSearch:
             b2b,
             combo,
             total_garbage,
+            garbage_push_delay,
+            bag_seen,
             search_depth,
             beam_width,
             max_len,
@@ -173,6 +180,7 @@ class CB2BSearch:
         b2b: int,
         combo: int,
         total_garbage: int,
+        garbage_push_delay: int = 1,
         max_placements: int = 512,
     ) -> np.ndarray:
         """Decompose depth-0 scores into per-component terms.
@@ -200,6 +208,7 @@ class CB2BSearch:
             active_piece, hold_piece,
             queue_arr, len(queue_arr),
             b2b, combo, total_garbage,
+            garbage_push_delay,
             buf, max_placements,
         )
 

@@ -45,6 +45,11 @@
 #define SPIN_T_FULL 2
 #define SPIN_ALL_MINI 3
 
+// Garbage row marker: bit 10 set on a uint16_t row means the row is
+// simulated garbage during search — it is treated as occupied but
+// cannot be cleared by clear_lines().
+#define GARB_ROW_MARKER (1u << 10)  // 0x0400
+
 // BFS limits
 #define BFS_QUEUE_CAPACITY 8192
 #define BFS_STATE_SPACE (BOARD_ROWS * BOARD_COLS * ROTATIONS)
@@ -109,8 +114,37 @@ typedef struct {
     int depth0_placement_idx;  // Which placement was chosen at depth 0 (for output)
     bool b2b_broken;
     int prev_b2b;
+    float streak_attack;     // Cumulative attack across current unbroken combo (resets on 0-attack placement)
+    int garbage_remaining;   // Simulated garbage rows not yet pushed
+    int garbage_timer;       // Ticks until next garbage push (decremented on non-clear)
+    uint8_t bag_seen;        // Bitmask of pieces consumed from current 7-bag (bits 1-7)
     float score;
 } SearchState;
+
+// ============================================================
+// Bag Tracking Helpers (for speculative search beyond known queue)
+// ============================================================
+
+// Update bag tracking when a piece is consumed.
+// Returns the new bag_seen bitmask.
+// When all 7 pieces (PIECE_I=1 through PIECE_Z=7) have been consumed,
+// resets to 0 to represent a fresh bag.
+static uint8_t bag_consume_piece(uint8_t bag_seen, int piece_type) {
+    bag_seen |= (uint8_t)(1 << piece_type);
+    // Bits 1-7 all set = 0xFE means all 7 pieces consumed
+    if ((bag_seen & 0xFE) == 0xFE) bag_seen = 0;
+    return bag_seen;
+}
+
+// Get the remaining pieces in the current bag.
+// Writes piece types to out_pieces[], returns count.
+static int bag_get_remaining(uint8_t bag_seen, int* out_pieces) {
+    int count = 0;
+    for (int p = PIECE_I; p <= PIECE_Z; p++) {
+        if (!(bag_seen & (1 << p))) out_pieces[count++] = p;
+    }
+    return count;
+}
 
 // ============================================================
 // Globals (static to this translation unit)
@@ -148,6 +182,7 @@ static float W_WASTED_HOLE = 8.0f;      // penalty for non-enclosed holes not in
 static float W_ATTACK      = 5.0f;     // linear reward per point of total attack in search path
 static float W_APP_BONUS   = 0.0f;    // reward for high attack-per-piece efficiency (APP²)
 static float W_GARB_CANCEL = 4.0f;    // reward per attack point that cancels pending garbage
+static float W_STREAK     = 3.0f;    // superlinear reward for consecutive-attack streak
 
 // Runtime weight setter — allows Python to tune coefficients for testing
 void b2b_set_weights(
@@ -157,7 +192,7 @@ void b2b_set_weights(
     float b2b_break, float spike, float spin_setup,
     float tslot, float immobile_clear, float hole_ceiling,
     float wasted_hole, float attack, float app_bonus,
-    float garb_cancel
+    float garb_cancel, float streak
 ) {
     W_HEIGHT = height;
     W_AVG_HEIGHT = avg_height;
@@ -178,6 +213,7 @@ void b2b_set_weights(
     W_ATTACK = attack;
     W_APP_BONUS = app_bonus;
     W_GARB_CANCEL = garb_cancel;
+    W_STREAK = streak;
 }
 
 // ============================================================
@@ -465,6 +501,8 @@ static void lock_piece_on_board(uint16_t* board, int board_height,
 }
 
 // Clear full lines, shift rows down. Returns number of lines cleared.
+// Rows with GARB_ROW_MARKER set are simulated garbage and are never cleared
+// even if all 10 playfield bits are filled.
 static int clear_lines(uint16_t* board, int board_height) {
     uint16_t full_row = (1 << BOARD_COLS) - 1; // 0x3FF for 10 cols
     int clears = 0;
@@ -472,7 +510,8 @@ static int clear_lines(uint16_t* board, int board_height) {
     // Iterate bottom-up, shift down when clearing
     int write = board_height - 1;
     for (int read = board_height - 1; read >= 0; read--) {
-        if (board[read] == full_row) {
+        if ((board[read] & full_row) == full_row &&
+            !(board[read] & GARB_ROW_MARKER)) {
             clears++;
         } else {
             board[write] = board[read];
@@ -484,6 +523,27 @@ static int clear_lines(uint16_t* board, int board_height) {
         board[i] = 0;
     }
     return clears;
+}
+
+// Push simulated garbage rows onto the board during search.
+// Rows are fully filled (all 10 bits) + GARB_ROW_MARKER so they act as
+// unclearable occupied space. Everything above shifts up.
+// Returns the number of rows actually pushed (may be less if board would
+// overflow and cause instant death).
+static int push_simulated_garbage(uint16_t* board, int board_height, int rows) {
+    if (rows <= 0) return 0;
+
+    uint16_t garb_row = ((1 << BOARD_COLS) - 1) | GARB_ROW_MARKER;
+
+    // Shift existing rows up by 'rows' positions
+    for (int r = 0; r < board_height - rows; r++) {
+        board[r] = board[r + rows];
+    }
+    // Fill bottom 'rows' with garbage
+    for (int r = board_height - rows; r < board_height; r++) {
+        board[r] = garb_row;
+    }
+    return rows;
 }
 
 // Attack calculation — exact replica of Scorer.py
@@ -1374,7 +1434,7 @@ static BoardStats compute_board_stats(const uint16_t* board, int board_height,
     return s;
 }
 
-static float evaluate_state(const SearchState* state, int board_height, int total_garbage,
+static float evaluate_state(const SearchState* state, int board_height,
                             const int* queue, int queue_len) {
     float score = 0.0f;
 
@@ -1391,18 +1451,18 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
     BoardStats bs = compute_board_stats(state->board, board_height, upcoming, num_upcoming);
 
     int max_allowed = board_height - 4; // rows 0-3 are invisible/death zone
-    int effective_h = bs.max_height + total_garbage;
+
+    // Effective height: stack height + remaining garbage that hasn't
+    // been pushed onto the board yet.  Garbage that HAS been pushed is
+    // already reflected in bs.max_height (those rows are on the board
+    // with GARB_ROW_MARKER), so we only add the un-pushed remainder.
+    int effective_h = bs.max_height + state->garbage_remaining;
 
     // Instant death
     if (effective_h >= max_allowed) {
         return -1e6f;
     }
 
-    // Use effective height (stack + pending garbage) so every height-
-    // dependent term in the heuristic is naturally garbage-aware.
-    // More garbage → higher effective height → steeper penalty →
-    // stronger downstacking incentive.  No separate garbage-pressure
-    // section needed — it falls out of the math automatically.
     float h_ratio = (float)effective_h / (float)max_allowed;
 
     // ── PRIORITY 1: SURVIVAL ──────────────────────────────────
@@ -1416,8 +1476,8 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
     // pending, cancelling it is the single most important thing — this
     // reward is intentionally strong enough to override b2b maintenance
     // and board-shape preferences.
-    if (total_garbage > 0 && state->total_attack > 0.0f) {
-        float cancellable = fminf(state->total_attack, (float)total_garbage);
+    if (state->garbage_remaining > 0 && state->total_attack > 0.0f) {
+        float cancellable = fminf(state->total_attack, (float)state->garbage_remaining);
         score += W_GARB_CANCEL * cancellable;
     }
 
@@ -1519,7 +1579,7 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
     // Combo reward scaled by urgency: at low boards combos are nice; at
     // high effective height they become critical for survival because each
     // consecutive clear prevents garbage from pushing and reduces the stack.
-    score += W_COMBO * combo_val * urgency;
+    score += W_COMBO * combo_val * combo_val * urgency;
 
     // B2B break penalty — only allow breaking in the danger zone.
     //
@@ -1606,6 +1666,14 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
         }
     }
 
+    // Consecutive-attack streak reward: superlinear so each additional
+    // attack-sending placement is increasingly valuable. This drives
+    // commitment to combos once started (especially after a b2b break
+    // with surge, which seeds the streak with a large initial value).
+    if (state->streak_attack > 0.0f) {
+        score += W_STREAK * powf(state->streak_attack, 1.5f);
+    }
+
     return score;
 }
 
@@ -1613,7 +1681,7 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
 // Score Decomposition (for heuristic influence analysis)
 // ============================================================
 
-#define NUM_DECOMPOSE 21
+#define NUM_DECOMPOSE 22
 
 #define D_HEIGHT         0
 #define D_GARB_CANCEL    1
@@ -1636,12 +1704,12 @@ static float evaluate_state(const SearchState* state, int board_height, int tota
 #define D_SPIKE          18
 #define D_ATTACK         19
 #define D_APP            20
+#define D_STREAK         21
 
 int b2b_get_num_decompose(void) { return NUM_DECOMPOSE; }
 
 // Mirrors evaluate_state() exactly, but writes each term to d[] individually.
 static void evaluate_state_decompose(const SearchState* state, int board_height,
-                                      int total_garbage,
                                       const int* queue, int queue_len,
                                       float* d) {
     memset(d, 0, sizeof(float) * NUM_DECOMPOSE);
@@ -1655,7 +1723,7 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
     BoardStats bs = compute_board_stats(state->board, board_height, upcoming, num_upcoming);
 
     int max_allowed = board_height - 4;
-    int effective_h = bs.max_height + total_garbage;
+    int effective_h = bs.max_height + state->garbage_remaining;
     if (effective_h >= max_allowed) { d[D_HEIGHT] = -1e6f; return; }
 
     float h_ratio = (float)effective_h / (float)max_allowed;
@@ -1667,8 +1735,8 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
     // SURVIVAL
     d[D_HEIGHT] = -(W_HEIGHT * 15.0f * h_ratio * h_ratio)
                   -(W_HEIGHT * 15.0f * h_ratio * h_ratio * h_ratio);
-    if (total_garbage > 0 && state->total_attack > 0.0f)
-        d[D_GARB_CANCEL] = W_GARB_CANCEL * fminf(state->total_attack, (float)total_garbage);
+    if (state->garbage_remaining > 0 && state->total_attack > 0.0f)
+        d[D_GARB_CANCEL] = W_GARB_CANCEL * fminf(state->total_attack, (float)state->garbage_remaining);
     d[D_AVG_HEIGHT] = -W_AVG_HEIGHT * bs.avg_height;
     d[D_BUMPINESS]  = -W_BUMPINESS * bs.bumpiness;
 
@@ -1700,7 +1768,7 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
     float b2b_val = (state->b2b > 0) ? (float)state->b2b : 0.0f;
     d[D_B2B_LOG] = W_B2B * logf(2.0f + b2b_val) * b2b_scale;
     float combo_val = (state->combo > 0) ? (float)state->combo : 0.0f;
-    d[D_COMBO] = W_COMBO * combo_val * urgency;
+    d[D_COMBO] = W_COMBO * combo_val * combo_val * urgency;
 
     if (state->b2b_broken && state->prev_b2b >= 0) {
         float bc = W_B2B_BREAK;
@@ -1735,6 +1803,10 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
             d[D_APP] = W_APP_BONUS * app * app;
         }
     }
+
+    // STREAK
+    if (state->streak_attack > 0.0f)
+        d[D_STREAK] = W_STREAK * powf(state->streak_attack, 1.5f);
 }
 
 // Exported: enumerate depth-0 placements, return decomposed scores.
@@ -1745,10 +1817,12 @@ int b2b_decompose_c(
     int active_piece, int hold_piece,
     const int* queue, int queue_len,
     int b2b, int combo, int total_garbage,
+    int garbage_push_delay,
     float* decompose_out, int max_placements
 ) {
     if (!b2b_initialized) b2b_init_pieces();
 
+    int init_gt = (garbage_push_delay > 0) ? garbage_push_delay : 0;
     int count = 0;
     Placement placements[MAX_PLACEMENTS];
     int np;
@@ -1770,8 +1844,10 @@ int b2b_decompose_c(
         s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
         s.max_b2b_attack = s.b2b_attack;
         s.total_lines_cleared = clears; s.hold_piece = hold_piece;
+        s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
         s.next_queue_idx = 0; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
-        evaluate_state_decompose(&s, board_height, total_garbage, queue, queue_len,
+        s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
+        evaluate_state_decompose(&s, board_height, queue, queue_len,
                                   &decompose_out[count * NUM_DECOMPOSE]);
         count++;
     }
@@ -1794,8 +1870,10 @@ int b2b_decompose_c(
             s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
             s.max_b2b_attack = s.b2b_attack;
             s.total_lines_cleared = clears; s.hold_piece = active_piece;
+            s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s.next_queue_idx = 0; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
-            evaluate_state_decompose(&s, board_height, total_garbage, queue, queue_len,
+            s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
+            evaluate_state_decompose(&s, board_height, queue, queue_len,
                                       &decompose_out[count * NUM_DECOMPOSE]);
             count++;
         }
@@ -1817,8 +1895,10 @@ int b2b_decompose_c(
             s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
             s.max_b2b_attack = s.b2b_attack;
             s.total_lines_cleared = clears; s.hold_piece = active_piece;
+            s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s.next_queue_idx = 1; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
-            evaluate_state_decompose(&s, board_height, total_garbage, queue, queue_len,
+            s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
+            evaluate_state_decompose(&s, board_height, queue, queue_len,
                                       &decompose_out[count * NUM_DECOMPOSE]);
             count++;
         }
@@ -1880,6 +1960,8 @@ void b2b_search_c(
     int b2b,                        // Current b2b counter (-1 = none)
     int combo,                      // Current combo counter (-1 = none)
     int total_garbage,              // Total garbage lines in queue
+    int garbage_push_delay,         // Ticks until garbage pushes (0 = immediate)
+    int bag_seen_init,              // Bitmask: pieces consumed from current bag (after queue)
     int search_depth,               // Max search depth
     int beam_width,                 // Beam width
     int max_len,                    // Max key sequence length
@@ -1890,14 +1972,17 @@ void b2b_search_c(
 
     // Clamp parameters
     if (search_depth > MAX_SEARCH_DEPTH) search_depth = MAX_SEARCH_DEPTH;
-    if (search_depth > queue_len + 1) search_depth = queue_len + 1;
     if (beam_width > MAX_BEAM_WIDTH) beam_width = MAX_BEAM_WIDTH;
     if (search_depth < 1) search_depth = 1;
 
+    uint8_t initial_bag_seen = (uint8_t)(bag_seen_init & 0xFF);
+
     // Allocate beam arrays (current and next)
     // Use heap allocation since these can be large
-    int max_next = beam_width * MAX_PLACEMENTS;
-    if (max_next > MAX_BEAM_WIDTH * MAX_PLACEMENTS) max_next = MAX_BEAM_WIDTH * MAX_PLACEMENTS;
+    // Extra capacity when speculative depths are active (multiple pieces per beam state)
+    int spec_mult = (search_depth > queue_len + 1) ? 2 : 1;
+    int max_next = beam_width * MAX_PLACEMENTS * spec_mult;
+    if (max_next > MAX_BEAM_WIDTH * MAX_PLACEMENTS * 2) max_next = MAX_BEAM_WIDTH * MAX_PLACEMENTS * 2;
     SearchState* curr_beam = (SearchState*)malloc(max_next * sizeof(SearchState));
     SearchState* next_beam = (SearchState*)malloc(max_next * sizeof(SearchState));
     int curr_beam_size = 0;
@@ -1918,6 +2003,12 @@ void b2b_search_c(
     static Placement depth0_placements[MAX_PLACEMENTS * 2];
     static int depth0_is_hold[MAX_PLACEMENTS * 2];
     int depth0_count = 0;
+
+    // Initial garbage timer: the caller tells us the push delay.  A value
+    // of 0 means garbage pushes immediately on the first non-clearing step;
+    // 1 means it waits one tick, etc.  We use the delay as the initial
+    // countdown for the simulated garbage timer in the search state.
+    int init_garbage_timer = (garbage_push_delay > 0) ? garbage_push_delay : 0;
 
     // ---- Depth 0: enumerate placements for active piece and hold piece ----
 
@@ -1955,7 +2046,30 @@ void b2b_search_c(
         s->depth0_placement_idx = depth0_count;
         s->b2b_broken = ar.b2b_broken;
         s->prev_b2b = b2b;
-        s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+        s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
+        s->bag_seen = initial_bag_seen;
+
+        // Garbage simulation: cancel with attack, then tick+push if no clears
+        {
+            int gr = total_garbage;
+            int gt = init_garbage_timer;
+            if (ar.attack > 0 && gr > 0) {
+                int cancel = (int)ar.attack;
+                gr = (gr > cancel) ? gr - cancel : 0;
+            }
+            if (clears == 0 && gr > 0) {
+                if (gt <= 0) {
+                    push_simulated_garbage(s->board, board_height, gr);
+                    gr = 0;
+                } else {
+                    gt--;
+                }
+            }
+            s->garbage_remaining = gr;
+            s->garbage_timer = gt;
+        }
+
+        s->score = evaluate_state(s, board_height, queue, queue_len);
 
         depth0_placements[depth0_count] = *pl;
         depth0_is_hold[depth0_count] = 0;
@@ -1996,7 +2110,30 @@ void b2b_search_c(
             s->depth0_placement_idx = depth0_count;
             s->b2b_broken = ar.b2b_broken;
             s->prev_b2b = b2b;
-            s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+            s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
+            s->bag_seen = initial_bag_seen;
+
+            // Garbage simulation
+            {
+                int gr = total_garbage;
+                int gt = init_garbage_timer;
+                if (ar.attack > 0 && gr > 0) {
+                    int cancel = (int)ar.attack;
+                    gr = (gr > cancel) ? gr - cancel : 0;
+                }
+                if (clears == 0 && gr > 0) {
+                    if (gt <= 0) {
+                        push_simulated_garbage(s->board, board_height, gr);
+                        gr = 0;
+                    } else {
+                        gt--;
+                    }
+                }
+                s->garbage_remaining = gr;
+                s->garbage_timer = gt;
+            }
+
+            s->score = evaluate_state(s, board_height, queue, queue_len);
 
             depth0_placements[depth0_count] = *pl;
             depth0_is_hold[depth0_count] = 1;
@@ -2036,7 +2173,30 @@ void b2b_search_c(
             s->depth0_placement_idx = depth0_count;
             s->b2b_broken = ar.b2b_broken;
             s->prev_b2b = b2b;
-            s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+            s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
+            s->bag_seen = initial_bag_seen;
+
+            // Garbage simulation
+            {
+                int gr = total_garbage;
+                int gt = init_garbage_timer;
+                if (ar.attack > 0 && gr > 0) {
+                    int cancel = (int)ar.attack;
+                    gr = (gr > cancel) ? gr - cancel : 0;
+                }
+                if (clears == 0 && gr > 0) {
+                    if (gt <= 0) {
+                        push_simulated_garbage(s->board, board_height, gr);
+                        gr = 0;
+                    } else {
+                        gt--;
+                    }
+                }
+                s->garbage_remaining = gr;
+                s->garbage_timer = gt;
+            }
+
+            s->score = evaluate_state(s, board_height, queue, queue_len);
 
             depth0_placements[depth0_count] = *pl;
             depth0_is_hold[depth0_count] = 1;
@@ -2069,10 +2229,143 @@ void b2b_search_c(
 
             int qi = parent->next_queue_idx;
             if (qi >= queue_len) {
-                // No more pieces — keep this state as a leaf
-                if (next_beam_size < max_next) {
-                    next_beam[next_beam_size] = *parent;
-                    next_beam_size++;
+                // ---- Speculative: branch on remaining bag pieces ----
+                int remaining[7];
+                int n_remaining = bag_get_remaining(parent->bag_seen, remaining);
+
+                if (n_remaining == 0) {
+                    // All pieces consumed — shouldn't happen, keep as leaf
+                    if (next_beam_size < max_next) {
+                        next_beam[next_beam_size] = *parent;
+                        next_beam_size++;
+                    }
+                    continue;
+                }
+
+                for (int pi = 0; pi < n_remaining; pi++) {
+                    int spec_piece = remaining[pi];
+                    uint8_t new_bag = bag_consume_piece(parent->bag_seen, spec_piece);
+
+                    // Try placing speculative piece directly
+                    np = find_placements(parent->board, board_height, spec_piece, placements, MAX_PLACEMENTS, NULL);
+
+                    for (int i = 0; i < np && next_beam_size < max_next; i++) {
+                        Placement* pl = &placements[i];
+                        SearchState* s = &next_beam[next_beam_size];
+
+                        memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
+                        lock_piece_on_board(s->board, board_height, spec_piece, pl->rot, pl->landing_row, pl->col);
+                        int clears = clear_lines(s->board, board_height);
+
+                        bool perfect_clear = true;
+                        for (int r = 0; r < board_height; r++) {
+                            if (s->board[r] != 0) { perfect_clear = false; break; }
+                        }
+
+                        AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
+
+                        s->b2b = ar.new_b2b;
+                        s->combo = ar.new_combo;
+                        s->total_attack = parent->total_attack + ar.attack;
+                        s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
+                        { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
+                          s->b2b_attack = parent->b2b_attack + ba;
+                          s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
+                        s->total_lines_cleared = parent->total_lines_cleared + clears;
+                        s->hold_piece = parent->hold_piece;
+                        s->next_queue_idx = qi + 1;
+                        s->depth0_placement_idx = parent->depth0_placement_idx;
+                        s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
+                        s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
+                        s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
+                        s->bag_seen = new_bag;
+
+                        // Garbage simulation
+                        {
+                            int gr = parent->garbage_remaining;
+                            int gt = parent->garbage_timer;
+                            if (ar.attack > 0 && gr > 0) {
+                                int cancel = (int)ar.attack;
+                                gr = (gr > cancel) ? gr - cancel : 0;
+                            }
+                            if (clears == 0 && gr > 0) {
+                                if (gt <= 0) {
+                                    push_simulated_garbage(s->board, board_height, gr);
+                                    gr = 0;
+                                } else {
+                                    gt--;
+                                }
+                            }
+                            s->garbage_remaining = gr;
+                            s->garbage_timer = gt;
+                        }
+
+                        s->score = evaluate_state(s, board_height, queue, queue_len);
+
+                        next_beam_size++;
+                    }
+
+                    // Try hold swap (if hold piece exists)
+                    if (parent->hold_piece != PIECE_N) {
+                        int held = parent->hold_piece;
+                        np = find_placements(parent->board, board_height, held, placements, MAX_PLACEMENTS, NULL);
+
+                        for (int i = 0; i < np && next_beam_size < max_next; i++) {
+                            Placement* pl = &placements[i];
+                            SearchState* s = &next_beam[next_beam_size];
+
+                            memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
+                            lock_piece_on_board(s->board, board_height, held, pl->rot, pl->landing_row, pl->col);
+                            int clears = clear_lines(s->board, board_height);
+
+                            bool perfect_clear = true;
+                            for (int r = 0; r < board_height; r++) {
+                                if (s->board[r] != 0) { perfect_clear = false; break; }
+                            }
+
+                            AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
+
+                            s->b2b = ar.new_b2b;
+                            s->combo = ar.new_combo;
+                            s->total_attack = parent->total_attack + ar.attack;
+                            s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
+                            { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
+                              s->b2b_attack = parent->b2b_attack + ba;
+                              s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
+                            s->total_lines_cleared = parent->total_lines_cleared + clears;
+                            s->hold_piece = spec_piece; // speculative piece goes to hold
+                            s->next_queue_idx = qi + 1;
+                            s->depth0_placement_idx = parent->depth0_placement_idx;
+                            s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
+                            s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
+                            s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
+                            s->bag_seen = new_bag;
+
+                            // Garbage simulation
+                            {
+                                int gr = parent->garbage_remaining;
+                                int gt = parent->garbage_timer;
+                                if (ar.attack > 0 && gr > 0) {
+                                    int cancel = (int)ar.attack;
+                                    gr = (gr > cancel) ? gr - cancel : 0;
+                                }
+                                if (clears == 0 && gr > 0) {
+                                    if (gt <= 0) {
+                                        push_simulated_garbage(s->board, board_height, gr);
+                                        gr = 0;
+                                    } else {
+                                        gt--;
+                                    }
+                                }
+                                s->garbage_remaining = gr;
+                                s->garbage_timer = gt;
+                            }
+
+                            s->score = evaluate_state(s, board_height, queue, queue_len);
+
+                            next_beam_size++;
+                        }
+                    }
                 }
                 continue;
             }
@@ -2110,7 +2403,30 @@ void b2b_search_c(
                 s->depth0_placement_idx = parent->depth0_placement_idx;
                 s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                 s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+                s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
+                s->bag_seen = parent->bag_seen;
+
+                // Garbage simulation (inherited from parent)
+                {
+                    int gr = parent->garbage_remaining;
+                    int gt = parent->garbage_timer;
+                    if (ar.attack > 0 && gr > 0) {
+                        int cancel = (int)ar.attack;
+                        gr = (gr > cancel) ? gr - cancel : 0;
+                    }
+                    if (clears == 0 && gr > 0) {
+                        if (gt <= 0) {
+                            push_simulated_garbage(s->board, board_height, gr);
+                            gr = 0;
+                        } else {
+                            gt--;
+                        }
+                    }
+                    s->garbage_remaining = gr;
+                    s->garbage_timer = gt;
+                }
+
+                s->score = evaluate_state(s, board_height, queue, queue_len);
 
                 next_beam_size++;
             }
@@ -2148,7 +2464,30 @@ void b2b_search_c(
                     s->depth0_placement_idx = parent->depth0_placement_idx;
                     s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                     s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+                    s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
+                    s->bag_seen = parent->bag_seen;
+
+                    // Garbage simulation (inherited from parent)
+                    {
+                        int gr = parent->garbage_remaining;
+                        int gt = parent->garbage_timer;
+                        if (ar.attack > 0 && gr > 0) {
+                            int cancel = (int)ar.attack;
+                            gr = (gr > cancel) ? gr - cancel : 0;
+                        }
+                        if (clears == 0 && gr > 0) {
+                            if (gt <= 0) {
+                                push_simulated_garbage(s->board, board_height, gr);
+                                gr = 0;
+                            } else {
+                                gt--;
+                            }
+                        }
+                        s->garbage_remaining = gr;
+                        s->garbage_timer = gt;
+                    }
+
+                    s->score = evaluate_state(s, board_height, queue, queue_len);
 
                     next_beam_size++;
                 }
@@ -2188,7 +2527,30 @@ void b2b_search_c(
                     s->depth0_placement_idx = parent->depth0_placement_idx;
                     s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                     s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->score = evaluate_state(s, board_height, total_garbage, queue, queue_len);
+                    s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
+                    s->bag_seen = parent->bag_seen;
+
+                    // Garbage simulation (inherited from parent)
+                    {
+                        int gr = parent->garbage_remaining;
+                        int gt = parent->garbage_timer;
+                        if (ar.attack > 0 && gr > 0) {
+                            int cancel = (int)ar.attack;
+                            gr = (gr > cancel) ? gr - cancel : 0;
+                        }
+                        if (clears == 0 && gr > 0) {
+                            if (gt <= 0) {
+                                push_simulated_garbage(s->board, board_height, gr);
+                                gr = 0;
+                            } else {
+                                gt--;
+                            }
+                        }
+                        s->garbage_remaining = gr;
+                        s->garbage_timer = gt;
+                    }
+
+                    s->score = evaluate_state(s, board_height, queue, queue_len);
 
                     next_beam_size++;
                 }
@@ -2478,12 +2840,24 @@ void b2b_run_eval_games(
 
             int tg = garb_total(gq, gcnt);
 
+            // --- Compute bag_seen for speculative search ---
+            // pq.bag[0..bag_pos-1] are pieces already drawn from current bag
+            uint8_t cur_bag_seen = 0;
+            if (pq.bag_pos < BAG_SIZE) {
+                for (int bi2 = 0; bi2 < pq.bag_pos; bi2++) {
+                    cur_bag_seen |= (uint8_t)(1 << pq.bag[bi2]);
+                }
+            }
+            // If bag_pos >= BAG_SIZE, cur_bag_seen stays 0 (fresh bag)
+
             // --- Beam search (reuses b2b_search_c — sequence is discarded) ---
             int action_idx;
             int64_t dummy_seq[15];
             b2b_search_c(
                 board, bh, active_piece, hold_piece,
                 pq.queue, pq.queue_len, b2b, combo, tg,
+                cfg.garbage_push_delay,
+                (int)cur_bag_seen,
                 search_depth, beam_width, 15,
                 &action_idx, dummy_seq
             );
