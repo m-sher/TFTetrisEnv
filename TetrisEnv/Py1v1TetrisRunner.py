@@ -123,6 +123,10 @@ class Py1v1TetrisRunner:
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs, 1),
         )
+        all_wins = tf.TensorArray(
+            dtype=tf.float32, size=self._num_steps, dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
         # Opponent state for asymmetric value model training
         all_opp_boards = tf.TensorArray(
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
@@ -224,6 +228,7 @@ class Py1v1TetrisRunner:
             attack_reward = reward["attack_reward"]
             total_reward = reward["total_reward"]
             garbage_pushed = reward["garbage_pushed"][..., None]
+            win = reward["win"]
 
             dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
@@ -244,6 +249,7 @@ class Py1v1TetrisRunner:
 
             all_dones = all_dones.write(t, dones)
             all_garbage_pushed = all_garbage_pushed.write(t, garbage_pushed)
+            all_wins = all_wins.write(t, win)
 
             all_opp_boards = all_opp_boards.write(t, opp_board)
             all_opp_b2b_combo_garbage = all_opp_b2b_combo_garbage.write(t, opp_b2b_combo_garbage)
@@ -273,6 +279,7 @@ class Py1v1TetrisRunner:
         all_total_reward = all_total_reward.stack()
         all_dones = all_dones.stack()
         all_garbage_pushed = all_garbage_pushed.stack()
+        all_wins = all_wins.stack()
         all_opp_boards = all_opp_boards.stack()
         all_opp_b2b_combo_garbage = all_opp_b2b_combo_garbage.stack()
 
@@ -293,6 +300,7 @@ class Py1v1TetrisRunner:
             all_total_reward,
             all_dones,
             all_garbage_pushed,
+            all_wins,
             # Opponent state for value model training
             all_opp_boards,
             all_opp_b2b_combo_garbage,

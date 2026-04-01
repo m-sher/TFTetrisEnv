@@ -127,6 +127,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             "attack_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack_reward"),
             "total_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="total_reward"),
             "garbage_pushed": array_spec.ArraySpec(shape=(), dtype=np.float32, name="garbage_pushed"),
+            "win": array_spec.ArraySpec(shape=(), dtype=np.float32, name="win"),
         }
 
         print(f"Initialized 1v1 Env {idx}", flush=True)
@@ -242,12 +243,15 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         # --- Observation ---
         observation = self._create_1v1_observation()
 
+        p1_won = p2_died and not p1_died
+
         reward = {
             "attack": np.float32(attack1),
             "clear": np.float32(clear1),
             "attack_reward": np.float32(attack_reward),
             "total_reward": np.float32(total_reward),
             "garbage_pushed": np.float32(garbage_pushed1),
+            "win": np.float32(p1_won),
         }
 
         self._episode_ended = p1_died or p2_died or (
