@@ -49,7 +49,7 @@ class Py1v1TetrisRunner:
                 max_steps=max_steps,
                 max_len=max_len,
                 pathfinding=pathfinding,
-                seed=seed + idx,
+                seed=seed + idx if seed is not None else None,
                 idx=idx,
                 num_row_tiers=num_row_tiers,
             )
