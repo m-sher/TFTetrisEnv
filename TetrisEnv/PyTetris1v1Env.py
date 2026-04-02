@@ -39,6 +39,10 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         self._num_row_tiers = num_row_tiers
         self._gamma = gamma
 
+        # Ensure a non-None seed so both sides stay in sync across resets
+        if seed is None:
+            seed = random.randint(0, 2**31)
+
         # Separate RNG for garbage hole column selection
         self._random = random.Random(seed)
 
@@ -68,7 +72,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             max_steps=None,
             max_len=max_len,
             pathfinding=pathfinding,
-            seed=(seed + 99991) if seed is not None else None,
+            seed=seed,
             idx=idx,
             garbage_chance=0.0,
             garbage_min=0,
@@ -128,6 +132,8 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             "total_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="total_reward"),
             "garbage_pushed": array_spec.ArraySpec(shape=(), dtype=np.float32, name="garbage_pushed"),
             "win": array_spec.ArraySpec(shape=(), dtype=np.float32, name="win"),
+            "opp_attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="opp_attack"),
+            "opp_clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="opp_clear"),
         }
 
         print(f"Initialized 1v1 Env {idx}", flush=True)
@@ -190,15 +196,9 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         top_out1, clear1, attack1, net1, _ = self._step_one_player(self._env1, action1)
         top_out2, clear2, attack2, net2, _ = self._step_one_player(self._env2, action2)
 
-        # --- Inject net attacks as garbage into opponent ---
-        if net1 > 0:
-            col = self._random.randint(0, 9)
-            self._env2._garbage_queue.append((int(net1), col))
-        if net2 > 0:
-            col = self._random.randint(0, 9)
-            self._env1._garbage_queue.append((int(net2), col))
-
-        # --- Push garbage for non-clearing players ---
+        # --- Push existing garbage for non-clearing players ---
+        # Push BEFORE injecting new attacks so incoming garbage always sits
+        # in the queue for at least one turn (opponent can see and cancel it).
         garbage_pushed1 = False
         if clear1 == 0 and self._env1._garbage_queue:
             self._env1._board, self._env1._vis_board, garbage_pushed1 = (
@@ -209,6 +209,14 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             self._env2._board, self._env2._vis_board, _ = (
                 self._env2._push_garbage_to_board(self._env2._board, self._env2._vis_board)
             )
+
+        # --- Inject net attacks as garbage into opponent ---
+        if net1 > 0:
+            col = self._random.randint(0, 9)
+            self._env2._garbage_queue.append((int(net1), col))
+        if net2 > 0:
+            col = self._random.randint(0, 9)
+            self._env1._garbage_queue.append((int(net2), col))
 
         # --- Death checks ---
         p1_died = top_out1 or np.any(self._env1._board[:24 - self._max_height] != 0.0)
@@ -252,6 +260,8 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             "total_reward": np.float32(total_reward),
             "garbage_pushed": np.float32(garbage_pushed1),
             "win": np.float32(p1_won),
+            "opp_attack": np.float32(attack2),
+            "opp_clear": np.float32(clear2),
         }
 
         self._episode_ended = p1_died or p2_died or (
