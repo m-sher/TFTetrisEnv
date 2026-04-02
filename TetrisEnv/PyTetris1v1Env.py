@@ -16,7 +16,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
     Only player 1's rewards are computed (player 2 is the opponent).
     """
 
-    _win_reward = 25.0
+    _win_reward = 100.0
 
     def __init__(
         self,
