@@ -33,6 +33,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         auto_push_garbage: bool = True,
         auto_fill_queue: bool = True,
         num_row_tiers: int = 1,
+        use_shaping: bool = True,
     ) -> None:
         self._attack_reward = 1.0
         self._b2b_coef = 2.0
@@ -58,6 +59,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._gamma = gamma
         self._auto_push_garbage = auto_push_garbage
         self._auto_fill_queue = auto_fill_queue
+        self._use_shaping = use_shaping
 
         self._seed = seed
 
@@ -249,9 +251,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         combo_val = self._scorer._combo
 
         attack_reward = self._attack_reward * attack
-        
-        current_phi = self._calculate_potential(b2b_val, combo_val, height_val, holes_val, skyline_val, bumpy_val)
-        shaping_reward = (self._gamma * current_phi) - self._last_phi
+
+        if self._use_shaping:
+            current_phi = self._calculate_potential(b2b_val, combo_val, height_val, holes_val, skyline_val, bumpy_val)
+            shaping_reward = (self._gamma * current_phi) - self._last_phi
+        else:
+            current_phi = 0.0
+            shaping_reward = 0.0
 
         exceeded_holes = (
             holes_val > self._max_holes if self._max_holes is not None else False

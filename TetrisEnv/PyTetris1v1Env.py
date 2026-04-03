@@ -30,6 +30,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         idx: int,
         gamma: float = 0.99,
         num_row_tiers: int = 2,
+        use_shaping: bool = False,
     ) -> None:
         self._max_holes = max_holes
         self._max_height = max_height
@@ -38,6 +39,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         self._queue_size = queue_size
         self._num_row_tiers = num_row_tiers
         self._gamma = gamma
+        self._use_shaping = use_shaping
 
         # Ensure a non-None seed so both sides stay in sync across resets
         if seed is None:
@@ -64,6 +66,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             auto_push_garbage=False,
             auto_fill_queue=False,
             num_row_tiers=num_row_tiers,
+            use_shaping=use_shaping,
         )
         self._env2 = PyTetrisEnv(
             queue_size=queue_size,
@@ -81,6 +84,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             auto_push_garbage=False,
             auto_fill_queue=False,
             num_row_tiers=num_row_tiers,
+            use_shaping=use_shaping,
         )
 
         self._step_num = 0
@@ -233,11 +237,14 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         # --- Reward for player 1 ---
         attack_reward = self._env1._attack_reward * attack1
 
-        b2b_val = self._env1._scorer._b2b
-        combo_val = self._env1._scorer._combo
-        current_phi = self._env1._calculate_potential(b2b_val, combo_val, h1, holes1, sky1, bump1)
-        shaping_reward = (self._gamma * current_phi) - self._env1._last_phi
-        self._env1._last_phi = current_phi
+        if self._use_shaping:
+            b2b_val = self._env1._scorer._b2b
+            combo_val = self._env1._scorer._combo
+            current_phi = self._env1._calculate_potential(b2b_val, combo_val, h1, holes1, sky1, bump1)
+            shaping_reward = (self._gamma * current_phi) - self._env1._last_phi
+            self._env1._last_phi = current_phi
+        else:
+            shaping_reward = 0.0
 
         death_penalty = self._env1._death_penalty if p1_died else 0.0
         win_reward = self._win_reward if p2_died and not p1_died else 0.0
