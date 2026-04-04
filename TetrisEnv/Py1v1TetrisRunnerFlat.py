@@ -121,6 +121,10 @@ class Py1v1TetrisRunnerFlat:
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs, 24, 10, 1),
         )
+        all_opp_pieces = tf.TensorArray(
+            dtype=tf.int64, size=self._num_steps, dynamic_size=False,
+            element_shape=(self._num_envs, self._queue_size + 2),
+        )
         all_opp_b2b_combo_garbage = tf.TensorArray(
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs, 3),
@@ -185,7 +189,7 @@ class Py1v1TetrisRunnerFlat:
 
             # --- Asymmetric value estimate (sees both boards) ---
             values = self.v_model.predict(
-                (board, pieces, b2b_combo_garbage, opp_board, opp_b2b_combo_garbage)
+                (board, pieces, b2b_combo_garbage, opp_board, opp_pieces, opp_b2b_combo_garbage)
             )
 
             # --- Step env with combined actions ---
@@ -220,6 +224,7 @@ class Py1v1TetrisRunnerFlat:
             all_wins = all_wins.write(t, win)
 
             all_opp_boards = all_opp_boards.write(t, opp_board)
+            all_opp_pieces = all_opp_pieces.write(t, opp_pieces)
             all_opp_b2b_combo_garbage = all_opp_b2b_combo_garbage.write(t, opp_b2b_combo_garbage)
 
         # Bootstrap
@@ -227,9 +232,10 @@ class Py1v1TetrisRunnerFlat:
         pieces = time_step.observation["pieces"]
         b2b_combo_garbage = time_step.observation["b2b_combo_garbage"]
         opp_board = time_step.observation["opp_board"]
+        opp_pieces = time_step.observation["opp_pieces"]
         opp_b2b_combo_garbage = time_step.observation["opp_b2b_combo_garbage"]
         all_last_values = self.v_model.predict(
-            (board, pieces, b2b_combo_garbage, opp_board, opp_b2b_combo_garbage)
+            (board, pieces, b2b_combo_garbage, opp_board, opp_pieces, opp_b2b_combo_garbage)
         )
 
         all_boards = all_boards.stack()
@@ -247,6 +253,7 @@ class Py1v1TetrisRunnerFlat:
         all_garbage_pushed = all_garbage_pushed.stack()
         all_wins = all_wins.stack()
         all_opp_boards = all_opp_boards.stack()
+        all_opp_pieces = all_opp_pieces.stack()
         all_opp_b2b_combo_garbage = all_opp_b2b_combo_garbage.stack()
 
         return (
@@ -267,5 +274,6 @@ class Py1v1TetrisRunnerFlat:
             all_wins,
             # Opponent state for value model training
             all_opp_boards,
+            all_opp_pieces,
             all_opp_b2b_combo_garbage,
         )
