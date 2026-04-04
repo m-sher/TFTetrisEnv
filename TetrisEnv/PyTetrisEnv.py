@@ -29,6 +29,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_chance: float = 0.0,
         garbage_min: int = 0,
         garbage_max: int = 0,
+        garbage_push_delay: int = 1,
         gamma: float = 0.99,
         auto_push_garbage: bool = True,
         auto_fill_queue: bool = True,
@@ -55,6 +56,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._garbage_chance = garbage_chance
         self._garbage_min = garbage_min
         self._garbage_max = garbage_max
+        self._garbage_push_delay = garbage_push_delay
 
         self._gamma = gamma
         self._auto_push_garbage = auto_push_garbage
@@ -86,8 +88,9 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._active_piece = self._spawn_piece(self._next_bag.pop(0))
         self._queue = self._fill_queue([])
 
-        # Initialize garbage queue - stores tuples of (num_rows, empty_column)
-        self._garbage_queue: List[Tuple[int, int]] = []
+        # Initialize garbage queue - stores (num_rows, empty_column, push_timer)
+        # push_timer counts down non-clear steps until the garbage is pushed.
+        self._garbage_queue: List[Tuple[int, int, int]] = []
 
         self._episode_ended = False
 
@@ -239,10 +242,19 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         garbage_pushed = False
         if self._auto_push_garbage and clear == 0:  # No lines were cleared
+            self._tick_garbage_timers()
             board, vis_board, garbage_pushed = self._push_garbage_to_board(board, vis_board)
 
         # Check if new garbage should be added to queue
         self._add_to_garbage_queue()
+
+        # delay=0: push newly generated garbage immediately (same step)
+        if self._auto_push_garbage and self._garbage_push_delay == 0:
+            while self._garbage_queue:
+                board, vis_board, pushed = self._push_garbage_to_board(board, vis_board)
+                if not pushed:
+                    break
+                garbage_pushed = True
 
         # Get board stats and compute supplementary rewards AFTER garbage
         height_val, holes_val, skyline_val, bumpy_val = self._board_stats(board)
@@ -603,17 +615,28 @@ class PyTetrisEnv(py_environment.PyEnvironment):
 
         empty_column = self._random.randint(0, 9)
 
-        # Add garbage instance to queue instead of immediately to board
-        self._garbage_queue.append((num_garbage_rows, empty_column))
+        # Add garbage instance to queue with push delay timer
+        self._garbage_queue.append((num_garbage_rows, empty_column, self._garbage_push_delay))
+
+    def _tick_garbage_timers(self) -> None:
+        """Decrement push_timer on all queued garbage (called on non-clear steps)."""
+        for i in range(len(self._garbage_queue)):
+            rows, col, timer = self._garbage_queue[i]
+            if timer > 0:
+                self._garbage_queue[i] = (rows, col, timer - 1)
 
     def _push_garbage_to_board(
         self, board: np.ndarray, vis_board: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray, bool]:
-        """Push the next garbage from the queue to the board."""
+        """Push the next garbage from the queue to the board if its timer expired."""
         if not self._garbage_queue:
             return board, vis_board, False
 
-        num_garbage_rows, empty_column = self._garbage_queue.pop(0)
+        # Only push if front item's timer has reached 0
+        if self._garbage_queue[0][2] > 0:
+            return board, vis_board, False
+
+        num_garbage_rows, empty_column, _ = self._garbage_queue.pop(0)
 
         garbage_rows = np.ones((num_garbage_rows, 10), dtype=np.float32)
         garbage_rows[:, empty_column] = 0.0
@@ -630,7 +653,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         lines_to_remove = int(attack_amount)
 
         while lines_to_remove > 0 and self._garbage_queue:
-            num_garbage_rows, empty_column = self._garbage_queue[0]
+            num_garbage_rows, empty_column, timer = self._garbage_queue[0]
 
             if num_garbage_rows <= lines_to_remove:
                 # Remove entire garbage instance
@@ -638,11 +661,11 @@ class PyTetrisEnv(py_environment.PyEnvironment):
                 self._garbage_queue.pop(0)
             else:
                 # Partially reduce garbage instance
-                self._garbage_queue[0] = (num_garbage_rows - lines_to_remove, empty_column)
+                self._garbage_queue[0] = (num_garbage_rows - lines_to_remove, empty_column, timer)
                 lines_to_remove = 0
 
     def _get_total_garbage(self) -> int:
-        return sum([num_garbage_rows for num_garbage_rows, _ in self._garbage_queue])
+        return sum(rows for rows, _, _ in self._garbage_queue)
 
     def _get_heights(self, board: np.ndarray) -> np.ndarray:
         # Get heights of each column in the board
