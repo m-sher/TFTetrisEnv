@@ -28,36 +28,29 @@ def _find_lib():
 
 
 _lib = ctypes.CDLL(_find_lib())
-_lib.b2b_set_weights.argtypes = [ctypes.c_float] * 20
+_lib.b2b_set_weights.argtypes = [ctypes.c_float] * 11
 _lib.b2b_set_weights.restype = None
 
 # Default weights (baseline)
 DEFAULTS = dict(
-    height=10.0, avg_height=5.0, bumpiness=0,
-    holes=0, hole_col=0, deep_holes=0.0,
-    clearable=0, b2b=10.0, combo=0,
-    b2b_break=1.0, spike=0.0, spin_setup=1.0,
-    tslot=2.0, immobile_clear=2.0, hole_ceiling=0.0,
-    wasted_hole=0.0, attack=10.0, app_bonus=0.0,
-    garb_cancel=0.0,
-    streak=0.0,
+    height=10.0, bumpiness=1.0, holes=10.0,
+    b2b=10.0, combo=1.0, b2b_break=10.0,
+    spike=1.0, tslot=1.0, immobile_clear=1.0,
+    wasted_hole=10.0, attack=10.0,
 )
 
 
 def set_weights(**overrides):
     w = {**DEFAULTS, **overrides}
     _lib.b2b_set_weights(
-        w["height"], w["avg_height"], w["bumpiness"],
-        w["holes"], w["hole_col"], w["deep_holes"],
-        w["clearable"], w["b2b"], w["combo"],
-        w["b2b_break"], w["spike"], w["spin_setup"],
-        w["tslot"], w["immobile_clear"], w["hole_ceiling"],
-        w["wasted_hole"], w["attack"], w["app_bonus"],
-        w["garb_cancel"], w["streak"],
+        w["height"], w["bumpiness"], w["holes"],
+        w["b2b"], w["combo"], w["b2b_break"],
+        w["spike"], w["tslot"], w["immobile_clear"],
+        w["wasted_hole"], w["attack"],
     )
 
 
-def run_game(seed, num_steps=200, search_depth=4, beam_width=64,
+def run_game(seed, num_steps=200, search_depth=6, beam_width=96,
              garbage_chance=0.15, garbage_min=1, garbage_max=4, queue_size=5):
     """Run a single headless game and return stats dict."""
     env = PyTetrisEnv(
@@ -165,7 +158,7 @@ CONFIGS = {
 }
 
 
-def run_no_garbage_game(seed, num_steps=200, search_depth=4, beam_width=64,
+def run_no_garbage_game(seed, num_steps=200, search_depth=6, beam_width=96,
                          queue_size=5):
     """Run a game with NO garbage — tests pure B2B maintenance."""
     return run_game(seed=seed, num_steps=num_steps, search_depth=search_depth,

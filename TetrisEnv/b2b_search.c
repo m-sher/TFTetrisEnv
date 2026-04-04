@@ -114,7 +114,6 @@ typedef struct {
     int depth0_placement_idx;  // Which placement was chosen at depth 0 (for output)
     bool b2b_broken;
     int prev_b2b;
-    float streak_attack;     // Cumulative attack across current unbroken combo (resets on 0-attack placement)
     int garbage_remaining;   // Simulated garbage rows not yet pushed
     int garbage_timer;       // Ticks until next garbage push (decremented on non-clear)
     uint8_t bag_seen;        // Bitmask of pieces consumed from current 7-bag (bits 1-7)
@@ -164,56 +163,35 @@ static int8_t B2B_I_KICKS[4][4][5][2];
 // Heuristic weights — SURVIVAL first, then B2B, then attack
 // These are mutable so they can be tuned at runtime via b2b_set_weights().
 static float W_HEIGHT      = 6.0f;
-static float W_AVG_HEIGHT  = 1.5f;
 static float W_BUMPINESS   = 1.2f;
-static float W_HOLES       = 4.0f;      // reduced: holes aren't always bad (spin setups)
-static float W_HOLE_COL    = 2.5f;      // penalty per distinct column with holes
-static float W_DEEP_HOLES  = 3.0f;      // extra penalty for holes buried deep
-static float W_CLEARABLE   = 2.5f;
+static float W_HOLES       = 4.0f;
 static float W_B2B         = 100.0f;
 static float W_COMBO       = 4.0f;
-static float W_B2B_BREAK   = 18.0f;      // strong: only break in danger zone
+static float W_B2B_BREAK   = 18.0f;
 static float W_SPIKE       = 4.0f;
-static float W_SPIN_SETUP  = 10.0f;      // reward for immobile spin placements
-static float W_TSLOT       = 8.0f;      // reward for T-spin slots specifically
-static float W_IMMOBILE_CLEAR = 8.0f;   // reward for immobile placements that clear lines (b2b downstack)
-static float W_HOLE_CEILING = 0.8f;     // penalty for filled cells above enclosed holes
-static float W_WASTED_HOLE = 8.0f;      // penalty for non-enclosed holes not in any immobile placement
-static float W_ATTACK      = 5.0f;     // linear reward per point of total attack in search path
-static float W_APP_BONUS   = 0.0f;    // reward for high attack-per-piece efficiency (APP²)
-static float W_GARB_CANCEL = 4.0f;    // reward per attack point that cancels pending garbage
-static float W_STREAK     = 3.0f;    // superlinear reward for consecutive-attack streak
+static float W_TSLOT       = 8.0f;
+static float W_IMMOBILE_CLEAR = 8.0f;
+static float W_WASTED_HOLE = 8.0f;
+static float W_ATTACK      = 5.0f;
 
 // Runtime weight setter — allows Python to tune coefficients for testing
 void b2b_set_weights(
-    float height, float avg_height, float bumpiness,
-    float holes, float hole_col, float deep_holes,
-    float clearable, float b2b, float combo,
-    float b2b_break, float spike, float spin_setup,
-    float tslot, float immobile_clear, float hole_ceiling,
-    float wasted_hole, float attack, float app_bonus,
-    float garb_cancel, float streak
+    float height, float bumpiness, float holes,
+    float b2b, float combo, float b2b_break,
+    float spike, float tslot, float immobile_clear,
+    float wasted_hole, float attack
 ) {
     W_HEIGHT = height;
-    W_AVG_HEIGHT = avg_height;
     W_BUMPINESS = bumpiness;
     W_HOLES = holes;
-    W_HOLE_COL = hole_col;
-    W_DEEP_HOLES = deep_holes;
-    W_CLEARABLE = clearable;
     W_B2B = b2b;
     W_COMBO = combo;
     W_B2B_BREAK = b2b_break;
     W_SPIKE = spike;
-    W_SPIN_SETUP = spin_setup;
     W_TSLOT = tslot;
     W_IMMOBILE_CLEAR = immobile_clear;
-    W_HOLE_CEILING = hole_ceiling;
     W_WASTED_HOLE = wasted_hole;
     W_ATTACK = attack;
-    W_APP_BONUS = app_bonus;
-    W_GARB_CANCEL = garb_cancel;
-    W_STREAK = streak;
 }
 
 // ============================================================
@@ -848,23 +826,77 @@ static void compute_reachability(const uint16_t* board, int board_height,
     }
 }
 
-// Count enclosed holes using precomputed reachability.
-// Holes that are part of a spin setup (immobile_cells) are excluded —
-// they're intentional cavities, not structural damage.
-static int count_enclosed_holes_from_reachability(const uint16_t* board,
-                                                   int board_height,
-                                                   const uint16_t* reachable,
-                                                   const uint16_t* immobile_cells) {
+// Count enclosed hole SECTIONS (connected components) using precomputed
+// reachability.  A "section" is a maximal 4-connected group of enclosed
+// empty cells.  Cells in immobile_cells[] are excluded.
+//
+// Fewer, larger cavities score lower than many scattered single-cell holes.
+static int count_hole_sections(const uint16_t* board,
+                               int board_height,
+                               const uint16_t* reachable,
+                               const uint16_t* immobile_cells) {
     uint16_t full_mask = (1 << BOARD_COLS) - 1;
-    int holes = 0;
+
+    // Build per-row bitmask of hole cells
+    uint16_t hole_mask[BOARD_ROWS];
     for (int r = 0; r < board_height; r++) {
         uint16_t empty = (~board[r]) & full_mask;
         uint16_t enclosed = empty & (~reachable[r]);
-        enclosed &= ~immobile_cells[r];  // exempt spin setup cells
-        uint16_t v = enclosed;
-        while (v) { holes++; v &= v - 1; }
+        enclosed &= ~immobile_cells[r];
+        hole_mask[r] = enclosed;
     }
-    return holes;
+
+    // Flood-fill BFS to count connected components (4-connected)
+    uint16_t visited[BOARD_ROWS];
+    memset(visited, 0, sizeof(uint16_t) * board_height);
+
+    // Queue — worst case is every cell on the board
+    int queue_r[BOARD_ROWS * BOARD_COLS];
+    int queue_c[BOARD_ROWS * BOARD_COLS];
+
+    int sections = 0;
+    for (int r = 0; r < board_height; r++) {
+        uint16_t remaining = hole_mask[r] & ~visited[r];
+        while (remaining) {
+            // Pick lowest-set-bit column
+            int c = __builtin_ctz(remaining);
+
+            // New connected component — flood fill from (r, c)
+            sections++;
+            int front = 0, back = 0;
+            queue_r[back] = r;
+            queue_c[back] = c;
+            back++;
+            visited[r] |= (uint16_t)(1 << c);
+
+            while (front < back) {
+                int cr = queue_r[front];
+                int cc = queue_c[front];
+                front++;
+
+                // 4 neighbors: up, down, left, right
+                const int dr[4] = {-1, 1, 0, 0};
+                const int dc[4] = {0, 0, -1, 1};
+                for (int d = 0; d < 4; d++) {
+                    int nr = cr + dr[d];
+                    int nc = cc + dc[d];
+                    if (nr < 0 || nr >= board_height ||
+                        nc < 0 || nc >= BOARD_COLS) continue;
+                    uint16_t nbit = (uint16_t)(1 << nc);
+                    if (!(hole_mask[nr] & nbit)) continue;
+                    if (visited[nr] & nbit) continue;
+                    visited[nr] |= nbit;
+                    queue_r[back] = nr;
+                    queue_c[back] = nc;
+                    back++;
+                }
+            }
+
+            remaining = hole_mask[r] & ~visited[r];
+        }
+    }
+
+    return sections;
 }
 
 // Compute "hole ceiling weight": for each enclosed hole, count the number
@@ -1322,7 +1354,7 @@ static BoardStats compute_board_stats(const uint16_t* board, int board_height,
     uint16_t no_exempt[BOARD_ROWS];
     memset(no_exempt, 0, sizeof(no_exempt));
 
-    s.holes = count_enclosed_holes_from_reachability(board, board_height, reachable, no_exempt);
+    s.holes = count_hole_sections(board, board_height, reachable, no_exempt);
 
     s.hole_columns = 0;
     for (int c = 0; c < BOARD_COLS; c++) {
@@ -1471,63 +1503,24 @@ static float evaluate_state(const SearchState* state, int board_height,
     score -= W_HEIGHT * 15.0f * h_ratio * h_ratio;
     score -= W_HEIGHT * 15.0f * h_ratio * h_ratio * h_ratio;
 
-    // Garbage cancellation reward: ATTACK (not lines cleared) is what
-    // actually removes garbage from the queue in-game.  When garbage is
-    // pending, cancelling it is the single most important thing — this
-    // reward is intentionally strong enough to override b2b maintenance
-    // and board-shape preferences.
-    if (state->garbage_remaining > 0 && state->total_attack > 0.0f) {
-        float cancellable = fminf(state->total_attack, (float)state->garbage_remaining);
-        score += W_GARB_CANCEL * cancellable;
-    }
-
-    // Average height penalty
-    score -= W_AVG_HEIGHT * bs.avg_height;
-
     // Bumpiness penalty
     score -= W_BUMPINESS * bs.bumpiness;
 
-    // ── HOLES: nuanced penalty ────────────────────────────────
-    // Use diminishing returns: first hole is bad, but each additional hole
-    // is less incrementally bad (the damage is already done).
-    // Deep holes (buried under 2+ cells) are worse than shallow ones.
-    // Holes that are part of a spin setup are partially forgiven.
+    // ── HOLES ─────────────────────────────────────────────────
 
-    float hole_mult = 1.0f + 0.5f * h_ratio;  // less height scaling than before
+    float hole_mult = 1.0f + 0.5f * h_ratio;
 
-    // Base hole penalty with diminishing returns: sqrt-based
+    // Hole sections penalty (connected components of enclosed empty cells)
     if (bs.holes > 0) {
-        // First hole costs W_HOLES, each additional costs less
-        // Total: W_HOLES * (1 + 0.7 + 0.58 + 0.5 + ...) via sqrt scaling
-        float hole_penalty = W_HOLES * sqrtf((float)bs.holes) * hole_mult;
-        score -= hole_penalty;
+        score -= W_HOLES * (float)bs.holes * hole_mult;
     }
 
-    // Extra penalty for deep holes (these are truly hard to fix)
-    if (bs.deep_holes > 0) {
-        score -= W_DEEP_HOLES * (float)bs.deep_holes * hole_mult;
-    }
-
-    // Penalty for filled cells above enclosed holes (discourages upstacking
-    // over holes). The weight already accounts for hole height — holes higher
-    // in the stack contribute more penalty per filled cell above them.
-    if (bs.hole_ceiling_weight > 0.0f) {
-        score -= W_HOLE_CEILING * bs.hole_ceiling_weight;
-    }
-
-    // Penalty for non-enclosed holes that aren't part of any tucked placement.
-    // These are reachable gaps under the stack surface that serve no spin-setup
-    // purpose — they're pure structural damage that wastes board space.
+    // Penalty for non-enclosed holes not part of any spin setup
     if (bs.wasted_holes > 0) {
         score -= W_WASTED_HOLE * (float)bs.wasted_holes * hole_mult;
     }
 
-    // Penalty for distinct columns with holes (spread-out holes are worse)
-    score -= W_HOLE_COL * (float)bs.hole_columns * hole_mult;
-
-    // Hole forgiveness when clearing spin setups are present:
-    // holes tied to immobile-clearing placements or T-spin setups are
-    // partially forgiven — they're structural, not damage.
+    // Hole forgiveness when clearing spin setups are present
     if (bs.holes > 0) {
         float setup_count = bs.immobile_clearing_placements + (float)bs.t_spin_setups;
         if (setup_count > 0.0f) {
@@ -1536,117 +1529,76 @@ static float evaluate_state(const SearchState* state, int board_height,
         }
     }
 
-    // Urgency factor used by combo, spin-clear, and other height-sensitive rewards
-    float urgency = 1.0f + 2.0f * h_ratio;
-
     // Well bonus: having exactly 1 well (for Tetris I-piece) is good for B2B
     if (bs.well_count == 1 && bs.well_depth >= 4 && bs.well_depth <= 8) {
         score += 3.0f;
     } else if (bs.well_count == 1 && bs.well_depth >= 2 && bs.well_depth <= 3) {
-        score += 1.0f; // Small well is still somewhat useful
+        score += 1.0f;
     }
     if (bs.well_count > 1) {
         score -= 1.5f * (bs.well_count - 1);
     }
 
-    // Edge-column well penalty: wells in columns 0, 1, 8, 9 are hard to
-    // clear efficiently (only I-piece vertical or awkward placements reach
-    // them) and tend to create garbage-vulnerable board shapes.
     if (bs.edge_well_depth >= 3) {
         score -= 2.0f * (float)(bs.edge_well_depth - 2);
     }
 
     // ── PRIORITY 2: B2B MAINTENANCE & SPIN SETUPS ─────────────
 
-    // Emergency factor: when board is very high, B2B is less important
-    // BUT don't drop it too far — spin clears are still the most efficient
-    // way to clear lines at any height.
-    float b2b_scale = 1.0f;
-    if (h_ratio > 0.6f) {
-        b2b_scale = 1.0f - (h_ratio - 0.6f) * 1.0f;
-        if (b2b_scale < 0.35f) b2b_scale = 0.35f;
-    }
-
     // Flat bonus for having B2B active
     if (state->b2b >= 0) {
-        score += 10.0f * b2b_scale;
+        score += 10.0f;
     }
 
     // Additional value for higher B2B levels (logarithmic — diminishing returns)
     float b2b_val = (state->b2b > 0) ? (float)state->b2b : 0.0f;
     float combo_val = (state->combo > 0) ? (float)state->combo : 0.0f;
-    score += W_B2B * logf(2.0f + b2b_val) * b2b_scale;
-    // Combo reward scaled by urgency: at low boards combos are nice; at
-    // high effective height they become critical for survival because each
-    // consecutive clear prevents garbage from pushing and reduces the stack.
-    score += W_COMBO * combo_val * combo_val * urgency;
+    score += W_B2B * logf(2.0f + b2b_val);
+    score += W_COMBO * combo_val * combo_val;
 
-    // B2B break penalty — only allow breaking in the danger zone.
+    // B2B break penalty — decays smoothly based on accumulated b2b and
+    // the search path's attack-per-piece (APP).
     //
-    // Breaking b2b triggers a surge attack (real game mechanic) that
-    // makes the break look attractive through W_ATTACK / W_SPIKE.
-    // To prevent the bot from farming b2b to 4 just to break for surge,
-    // the penalty is prohibitively steep at safe board heights and only
-    // relaxes once effective height enters the danger zone.
-    //
-    // The reward for *building* b2b (log bonus, flat bonus) remains
-    // positive at all heights, so building is always incentivized.
+    // Both b2b and APP must be high for the penalty to be low:
+    //   low b2b  + any APP  → full penalty  (breaking early is always bad)
+    //   high b2b + low APP  → high penalty  (wasteful break)
+    //   high b2b + high APP → low penalty   (productive break)
     if (state->b2b_broken && state->prev_b2b >= 0) {
-        float break_cost = W_B2B_BREAK;
-        if (state->prev_b2b <= 1) {
-            break_cost *= 0.5f;
-        } else {
-            break_cost *= (1.0f + 0.3f * logf(1.0f + (float)state->prev_b2b));
-        }
-        // Inverse urgency: when downstacking pressure is high (urgency
-        // large), breaking is cheap.  When the board is safe (urgency ≈ 1),
-        // breaking is 3× base cost.  Same urgency variable drives both
-        // combo/spin-clear scaling and break tolerance.
-        score -= break_cost * (3.0f / urgency);
+        int pieces = state->next_queue_idx + 1;
+        float app = (pieces > 0) ? state->total_attack / (float)pieces : 0.0f;
+        float prev = (float)state->prev_b2b;
+
+        // b2b relief: 0 at b2b=0, smoothly approaches 1
+        float b2b_relief = prev / (prev + 3.0f);
+        // APP relief: 0 at APP=0, 0.5 at APP=1.0, approaches 1
+        float app_relief = app / (app + 1.0f);
+
+        // Both must be high for penalty to shrink
+        float relief = b2b_relief * app_relief;
+        score -= W_B2B_BREAK * (1.0f - relief);
     }
 
     // ── SPIN SETUP REWARDS ────────────────────────────────────
-    // Reward boards that have recognizable spin setups, especially T-spin slots.
-    // This encourages the algorithm to BUILD spin setups rather than just
-    // accidentally finding them.
 
     if (bs.t_spin_setups > 0) {
-        // Quality 2 = full T-spin possible, quality 1 = mini
         float t_reward = 0.0f;
         if (bs.t_slot_quality == 2) {
             t_reward = W_TSLOT;
         } else if (bs.t_slot_quality == 1) {
             t_reward = W_TSLOT * 0.4f;
         }
-        // Diminishing returns for multiple setups
         t_reward *= (1.0f + 0.3f * fminf((float)(bs.t_spin_setups - 1), 2.0f));
-        score += t_reward * b2b_scale;
+        score += t_reward;
     }
 
-    // Immobile spin placements: reward boards where upcoming queue pieces
-    // could be placed in a truly immobile position (ALL_MINI eligible).
-    // Values are queue-weighted so setups for the next piece score highest.
-    if (bs.immobile_placements > 0.0f) {
-        float imm_reward = W_SPIN_SETUP * sqrtf(bs.immobile_placements);
-        score += imm_reward * b2b_scale;
-    }
-
-    // Immobile placements that would also clear lines — these represent
-    // b2b-maintaining downstack opportunities (spin clears). Emphasized
-    // over base immobile reward because they directly increase b2b.
+    // Immobile placements that clear lines — b2b-maintaining downstack
     if (bs.immobile_clearing_placements > 0.0f) {
         float line_reward = W_IMMOBILE_CLEAR * sqrtf(bs.immobile_clearing_placements);
-        // Bonus scales with total lines clearable (doubles > singles)
         line_reward += 1.0f * fminf(bs.immobile_clearable_lines, 8.0f);
-        score += line_reward * b2b_scale;
+        score += line_reward;
     }
 
     // ── PRIORITY 3: ATTACK OUTPUT ───────────────────────────────
-    // Only b2b-maintaining attack (spins, tetrises, PCs) counts toward
-    // attack rewards.  Non-b2b clears still reduce height (survival) and
-    // cancel garbage, but earn zero attack credit.  This naturally makes
-    // the bot avoid breaking b2b — there's no upside to non-b2b clears
-    // beyond height relief.
 
     // Spike reward: superlinear in single b2b-maintaining attack
     score += W_SPIKE * powf(state->max_b2b_attack, 1.5f);
@@ -1656,24 +1608,6 @@ static float evaluate_state(const SearchState* state, int board_height,
         score += W_ATTACK * state->b2b_attack;
     }
 
-    // Efficiency bonus: b2b attack-per-piece ratio in the search path.
-    {
-        int depth = state->next_queue_idx + 1;  // pieces placed so far
-        if (state->b2b_attack > 0 && depth > 0) {
-            float app = state->b2b_attack / (float)depth;
-            // Superlinear reward for high APP — strongly favors efficient b2b paths
-            score += W_APP_BONUS * app * app;
-        }
-    }
-
-    // Consecutive-attack streak reward: superlinear so each additional
-    // attack-sending placement is increasingly valuable. This drives
-    // commitment to combos once started (especially after a b2b break
-    // with surge, which seeds the streak with a large initial value).
-    if (state->streak_attack > 0.0f) {
-        score += W_STREAK * powf(state->streak_attack, 1.5f);
-    }
-
     return score;
 }
 
@@ -1681,30 +1615,22 @@ static float evaluate_state(const SearchState* state, int board_height,
 // Score Decomposition (for heuristic influence analysis)
 // ============================================================
 
-#define NUM_DECOMPOSE 22
+#define NUM_DECOMPOSE 14
 
 #define D_HEIGHT         0
-#define D_GARB_CANCEL    1
-#define D_AVG_HEIGHT     2
-#define D_BUMPINESS      3
-#define D_HOLES          4
-#define D_DEEP_HOLES     5
-#define D_HOLE_CEILING   6
-#define D_WASTED_HOLES   7
-#define D_HOLE_COLS      8
-#define D_HOLE_FORGIVE   9
-#define D_WELL           10
-#define D_B2B_FLAT       11
-#define D_B2B_LOG        12
-#define D_COMBO          13
-#define D_B2B_BREAK      14
-#define D_TSLOT          15
-#define D_IMMOBILE_SETUP 16
-#define D_IMMOBILE_CLEAR 17
-#define D_SPIKE          18
-#define D_ATTACK         19
-#define D_APP            20
-#define D_STREAK         21
+#define D_BUMPINESS      1
+#define D_HOLES          2
+#define D_WASTED_HOLES   3
+#define D_HOLE_FORGIVE   4
+#define D_WELL           5
+#define D_B2B_FLAT       6
+#define D_B2B_LOG        7
+#define D_COMBO          8
+#define D_B2B_BREAK      9
+#define D_TSLOT          10
+#define D_IMMOBILE_CLEAR 11
+#define D_SPIKE          12
+#define D_ATTACK         13
 
 int b2b_get_num_decompose(void) { return NUM_DECOMPOSE; }
 
@@ -1728,28 +1654,17 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
 
     float h_ratio = (float)effective_h / (float)max_allowed;
     float hole_mult = 1.0f + 0.5f * h_ratio;
-    float urgency = 1.0f + 2.0f * h_ratio;
-    float b2b_scale = 1.0f;
-    if (h_ratio > 0.6f) { b2b_scale = 1.0f - (h_ratio - 0.6f); if (b2b_scale < 0.35f) b2b_scale = 0.35f; }
 
     // SURVIVAL
     d[D_HEIGHT] = -(W_HEIGHT * 15.0f * h_ratio * h_ratio)
                   -(W_HEIGHT * 15.0f * h_ratio * h_ratio * h_ratio);
-    if (state->garbage_remaining > 0 && state->total_attack > 0.0f)
-        d[D_GARB_CANCEL] = W_GARB_CANCEL * fminf(state->total_attack, (float)state->garbage_remaining);
-    d[D_AVG_HEIGHT] = -W_AVG_HEIGHT * bs.avg_height;
-    d[D_BUMPINESS]  = -W_BUMPINESS * bs.bumpiness;
+    d[D_BUMPINESS] = -W_BUMPINESS * bs.bumpiness;
 
     // HOLES
     if (bs.holes > 0)
-        d[D_HOLES] = -W_HOLES * sqrtf((float)bs.holes) * hole_mult;
-    if (bs.deep_holes > 0)
-        d[D_DEEP_HOLES] = -W_DEEP_HOLES * (float)bs.deep_holes * hole_mult;
-    if (bs.hole_ceiling_weight > 0.0f)
-        d[D_HOLE_CEILING] = -W_HOLE_CEILING * bs.hole_ceiling_weight;
+        d[D_HOLES] = -W_HOLES * (float)bs.holes * hole_mult;
     if (bs.wasted_holes > 0)
         d[D_WASTED_HOLES] = -W_WASTED_HOLE * (float)bs.wasted_holes * hole_mult;
-    d[D_HOLE_COLS] = -W_HOLE_COL * (float)bs.hole_columns * hole_mult;
     if (bs.holes > 0) {
         float sc = bs.immobile_clearing_placements + (float)bs.t_spin_setups;
         if (sc > 0.0f) d[D_HOLE_FORGIVE] = 1.5f * fminf(sc, (float)bs.holes) * hole_mult;
@@ -1764,17 +1679,20 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
     d[D_WELL] = well;
 
     // B2B / COMBO
-    if (state->b2b >= 0) d[D_B2B_FLAT] = 10.0f * b2b_scale;
+    if (state->b2b >= 0) d[D_B2B_FLAT] = 10.0f;
     float b2b_val = (state->b2b > 0) ? (float)state->b2b : 0.0f;
-    d[D_B2B_LOG] = W_B2B * logf(2.0f + b2b_val) * b2b_scale;
+    d[D_B2B_LOG] = W_B2B * logf(2.0f + b2b_val);
     float combo_val = (state->combo > 0) ? (float)state->combo : 0.0f;
-    d[D_COMBO] = W_COMBO * combo_val * combo_val * urgency;
+    d[D_COMBO] = W_COMBO * combo_val * combo_val;
 
     if (state->b2b_broken && state->prev_b2b >= 0) {
-        float bc = W_B2B_BREAK;
-        if (state->prev_b2b <= 1) bc *= 0.5f;
-        else bc *= (1.0f + 0.3f * logf(1.0f + (float)state->prev_b2b));
-        d[D_B2B_BREAK] = -bc * (3.0f / urgency);
+        int pieces = state->next_queue_idx + 1;
+        float app = (pieces > 0) ? state->total_attack / (float)pieces : 0.0f;
+        float prev = (float)state->prev_b2b;
+        float b2b_relief = prev / (prev + 3.0f);
+        float app_relief = app / (app + 1.0f);
+        float relief = b2b_relief * app_relief;
+        d[D_B2B_BREAK] = -W_B2B_BREAK * (1.0f - relief);
     }
 
     // SPIN SETUPS
@@ -1783,30 +1701,17 @@ static void evaluate_state_decompose(const SearchState* state, int board_height,
         if (bs.t_slot_quality == 2) tr = W_TSLOT;
         else if (bs.t_slot_quality == 1) tr = W_TSLOT * 0.4f;
         tr *= (1.0f + 0.3f * fminf((float)(bs.t_spin_setups - 1), 2.0f));
-        d[D_TSLOT] = tr * b2b_scale;
+        d[D_TSLOT] = tr;
     }
-    if (bs.immobile_placements > 0.0f)
-        d[D_IMMOBILE_SETUP] = W_SPIN_SETUP * sqrtf(bs.immobile_placements) * b2b_scale;
     if (bs.immobile_clearing_placements > 0.0f) {
         float lr = W_IMMOBILE_CLEAR * sqrtf(bs.immobile_clearing_placements);
         lr += 1.0f * fminf(bs.immobile_clearable_lines, 8.0f);
-        d[D_IMMOBILE_CLEAR] = lr * b2b_scale;
+        d[D_IMMOBILE_CLEAR] = lr;
     }
 
-    // ATTACK (b2b-maintaining only)
+    // ATTACK
     d[D_SPIKE] = W_SPIKE * powf(state->max_b2b_attack, 1.5f);
     if (state->b2b_attack > 0) d[D_ATTACK] = W_ATTACK * state->b2b_attack;
-    {
-        int depth = state->next_queue_idx + 1;
-        if (state->b2b_attack > 0 && depth > 0) {
-            float app = state->b2b_attack / (float)depth;
-            d[D_APP] = W_APP_BONUS * app * app;
-        }
-    }
-
-    // STREAK
-    if (state->streak_attack > 0.0f)
-        d[D_STREAK] = W_STREAK * powf(state->streak_attack, 1.5f);
 }
 
 // Exported: enumerate depth-0 placements, return decomposed scores.
@@ -1844,7 +1749,6 @@ int b2b_decompose_c(
         s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
         s.max_b2b_attack = s.b2b_attack;
         s.total_lines_cleared = clears; s.hold_piece = hold_piece;
-        s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
         s.next_queue_idx = 0; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
         s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
         evaluate_state_decompose(&s, board_height, queue, queue_len,
@@ -1870,7 +1774,6 @@ int b2b_decompose_c(
             s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
             s.max_b2b_attack = s.b2b_attack;
             s.total_lines_cleared = clears; s.hold_piece = active_piece;
-            s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s.next_queue_idx = 0; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
             s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
             evaluate_state_decompose(&s, board_height, queue, queue_len,
@@ -1895,7 +1798,6 @@ int b2b_decompose_c(
             s.b2b_attack = ar.b2b_maintaining ? ar.attack : 0.0f;
             s.max_b2b_attack = s.b2b_attack;
             s.total_lines_cleared = clears; s.hold_piece = active_piece;
-            s.streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s.next_queue_idx = 1; s.b2b_broken = ar.b2b_broken; s.prev_b2b = b2b;
             s.garbage_remaining = total_garbage; s.garbage_timer = init_gt;
             evaluate_state_decompose(&s, board_height, queue, queue_len,
@@ -2046,7 +1948,6 @@ void b2b_search_c(
         s->depth0_placement_idx = depth0_count;
         s->b2b_broken = ar.b2b_broken;
         s->prev_b2b = b2b;
-        s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
         s->bag_seen = initial_bag_seen;
 
         // Garbage simulation: cancel with attack, then tick+push if no clears
@@ -2110,7 +2011,6 @@ void b2b_search_c(
             s->depth0_placement_idx = depth0_count;
             s->b2b_broken = ar.b2b_broken;
             s->prev_b2b = b2b;
-            s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s->bag_seen = initial_bag_seen;
 
             // Garbage simulation
@@ -2173,7 +2073,6 @@ void b2b_search_c(
             s->depth0_placement_idx = depth0_count;
             s->b2b_broken = ar.b2b_broken;
             s->prev_b2b = b2b;
-            s->streak_attack = (ar.attack > 0) ? ar.attack : 0.0f;
             s->bag_seen = initial_bag_seen;
 
             // Garbage simulation
@@ -2277,7 +2176,6 @@ void b2b_search_c(
                         s->depth0_placement_idx = parent->depth0_placement_idx;
                         s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                         s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                        s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
                         s->bag_seen = new_bag;
 
                         // Garbage simulation
@@ -2338,7 +2236,6 @@ void b2b_search_c(
                             s->depth0_placement_idx = parent->depth0_placement_idx;
                             s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                             s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                            s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
                             s->bag_seen = new_bag;
 
                             // Garbage simulation
@@ -2403,7 +2300,6 @@ void b2b_search_c(
                 s->depth0_placement_idx = parent->depth0_placement_idx;
                 s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                 s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
                 s->bag_seen = parent->bag_seen;
 
                 // Garbage simulation (inherited from parent)
@@ -2464,7 +2360,6 @@ void b2b_search_c(
                     s->depth0_placement_idx = parent->depth0_placement_idx;
                     s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                     s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
                     s->bag_seen = parent->bag_seen;
 
                     // Garbage simulation (inherited from parent)
@@ -2527,7 +2422,6 @@ void b2b_search_c(
                     s->depth0_placement_idx = parent->depth0_placement_idx;
                     s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
                     s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->streak_attack = (ar.attack > 0) ? parent->streak_attack + ar.attack : 0.0f;
                     s->bag_seen = parent->bag_seen;
 
                     // Garbage simulation (inherited from parent)
