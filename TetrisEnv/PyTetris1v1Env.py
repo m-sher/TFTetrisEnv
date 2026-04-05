@@ -209,11 +209,13 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         # in the queue for at least one turn (opponent can see and cancel it).
         garbage_pushed1 = False
         if clear1 == 0 and self._env1._garbage_queue:
+            self._env1._tick_garbage_timers()
             self._env1._board, self._env1._vis_board, garbage_pushed1 = (
                 self._env1._push_garbage_to_board(self._env1._board, self._env1._vis_board)
             )
 
         if clear2 == 0 and self._env2._garbage_queue:
+            self._env2._tick_garbage_timers()
             self._env2._board, self._env2._vis_board, _ = (
                 self._env2._push_garbage_to_board(self._env2._board, self._env2._vis_board)
             )
@@ -221,10 +223,10 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         # --- Inject net attacks as garbage into opponent ---
         if net1 > 0:
             col = self._random.randint(0, 9)
-            self._env2._garbage_queue.append((int(net1), col))
+            self._env2._garbage_queue.append((int(net1), col, self._env2._garbage_push_delay))
         if net2 > 0:
             col = self._random.randint(0, 9)
-            self._env1._garbage_queue.append((int(net2), col))
+            self._env1._garbage_queue.append((int(net2), col, self._env1._garbage_push_delay))
 
         # --- Death checks ---
         p1_died = top_out1 or np.any(self._env1._board[:24 - self._max_height] != 0.0)
