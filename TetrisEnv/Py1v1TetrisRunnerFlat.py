@@ -25,6 +25,7 @@ class Py1v1TetrisRunnerFlat:
         seed: int = 123,
         num_sequences: int = 160,
         num_row_tiers: int = 2,
+        b2b_gap_coef: float = 0.0,
     ) -> None:
         self._queue_size = queue_size
         self._max_len = max_len
@@ -49,6 +50,7 @@ class Py1v1TetrisRunnerFlat:
                 seed=seed + idx if seed is not None else None,
                 idx=idx,
                 num_row_tiers=num_row_tiers,
+                b2b_gap_coef=b2b_gap_coef,
             )
             for i in range(num_envs)
         ]

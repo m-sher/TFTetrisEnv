@@ -31,6 +31,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         gamma: float = 0.99,
         num_row_tiers: int = 2,
         use_shaping: bool = False,
+        b2b_gap_coef: float = 0.0,
     ) -> None:
         self._max_holes = max_holes
         self._max_height = max_height
@@ -40,6 +41,8 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         self._num_row_tiers = num_row_tiers
         self._gamma = gamma
         self._use_shaping = use_shaping
+        self._b2b_gap_coef = b2b_gap_coef
+        self._last_b2b_gap_phi = 0.0
 
         # Ensure a non-None seed so both sides stay in sync across resets
         if seed is None:
@@ -182,6 +185,7 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         self._env2._reset()
         self._step_num = 0
         self._episode_ended = False
+        self._last_b2b_gap_phi = 0.0
         self._random = random.Random(self._random.randint(0, 2**31))
 
         observation = self._create_1v1_observation()
@@ -246,10 +250,19 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         else:
             shaping_reward = 0.0
 
+        # --- B2B gap potential-based shaping ---
+        if self._b2b_gap_coef > 0.0:
+            b2b_gap = self._env1._scorer._b2b - self._env2._scorer._b2b
+            b2b_gap_phi = self._b2b_gap_coef * b2b_gap
+            b2b_gap_reward = self._gamma * b2b_gap_phi - self._last_b2b_gap_phi
+            self._last_b2b_gap_phi = b2b_gap_phi
+        else:
+            b2b_gap_reward = 0.0
+
         death_penalty = self._env1._death_penalty if p1_died else 0.0
         win_reward = self._win_reward if p2_died and not p1_died else 0.0
 
-        total_reward = attack_reward + shaping_reward + death_penalty + win_reward
+        total_reward = attack_reward + shaping_reward + b2b_gap_reward + death_penalty + win_reward
 
         # --- Fill queues ---
         self._env1._queue = self._env1._fill_queue(self._env1._queue)
