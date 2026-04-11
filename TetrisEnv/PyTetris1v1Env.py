@@ -134,11 +134,13 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
 
         self._reward_spec = {
             "attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack"),
+            "net_attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="net_attack"),
             "clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="clear"),
             "attack_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="attack_reward"),
             "total_reward": array_spec.ArraySpec(shape=(), dtype=np.float32, name="total_reward"),
             "garbage_pushed": array_spec.ArraySpec(shape=(), dtype=np.float32, name="garbage_pushed"),
             "win": array_spec.ArraySpec(shape=(), dtype=np.float32, name="win"),
+            "loss": array_spec.ArraySpec(shape=(), dtype=np.float32, name="loss"),
             "opp_attack": array_spec.ArraySpec(shape=(), dtype=np.float32, name="opp_attack"),
             "opp_clear": array_spec.ArraySpec(shape=(), dtype=np.float32, name="opp_clear"),
         }
@@ -274,14 +276,17 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
         observation = self._create_1v1_observation()
 
         p1_won = p2_died and not p1_died
+        p1_lost = p1_died and not p2_died
 
         reward = {
             "attack": np.float32(attack1),
+            "net_attack": np.float32(net1),
             "clear": np.float32(clear1),
             "attack_reward": np.float32(attack_reward),
             "total_reward": np.float32(total_reward),
             "garbage_pushed": np.float32(garbage_pushed1),
             "win": np.float32(p1_won),
+            "loss": np.float32(p1_lost),
             "opp_attack": np.float32(attack2),
             "opp_clear": np.float32(clear2),
         }

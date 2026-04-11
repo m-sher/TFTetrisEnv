@@ -105,6 +105,10 @@ class Py1v1TetrisRunner:
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs,),
         )
+        all_net_attacks = tf.TensorArray(
+            dtype=tf.float32, size=self._num_steps, dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
         all_clears = tf.TensorArray(
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs,),
@@ -126,6 +130,10 @@ class Py1v1TetrisRunner:
             element_shape=(self._num_envs, 1),
         )
         all_wins = tf.TensorArray(
+            dtype=tf.float32, size=self._num_steps, dynamic_size=False,
+            element_shape=(self._num_envs,),
+        )
+        all_losses = tf.TensorArray(
             dtype=tf.float32, size=self._num_steps, dynamic_size=False,
             element_shape=(self._num_envs,),
         )
@@ -230,11 +238,13 @@ class Py1v1TetrisRunner:
 
             reward = time_step.reward
             attack = reward["attack"]
+            net_attack = reward["net_attack"]
             clear = reward["clear"]
             attack_reward = reward["attack_reward"]
             total_reward = reward["total_reward"]
             garbage_pushed = reward["garbage_pushed"][..., None]
             win = reward["win"]
+            loss = reward["loss"]
 
             dones = tf.cast(time_step.is_last(), tf.float32)[..., None]
 
@@ -249,6 +259,7 @@ class Py1v1TetrisRunner:
             all_values = all_values.write(t, values)
 
             all_attacks = all_attacks.write(t, attack)
+            all_net_attacks = all_net_attacks.write(t, net_attack)
             all_clears = all_clears.write(t, clear)
             all_attack_reward = all_attack_reward.write(t, attack_reward)
             all_total_reward = all_total_reward.write(t, total_reward)
@@ -256,6 +267,7 @@ class Py1v1TetrisRunner:
             all_dones = all_dones.write(t, dones)
             all_garbage_pushed = all_garbage_pushed.write(t, garbage_pushed)
             all_wins = all_wins.write(t, win)
+            all_losses = all_losses.write(t, loss)
 
             all_opp_boards = all_opp_boards.write(t, opp_board)
             all_opp_pieces = all_opp_pieces.write(t, opp_pieces)
@@ -282,12 +294,14 @@ class Py1v1TetrisRunner:
         all_action_indices = all_action_indices.stack()
         all_values = all_values.stack()
         all_attacks = all_attacks.stack()
+        all_net_attacks = all_net_attacks.stack()
         all_clears = all_clears.stack()
         all_attack_reward = all_attack_reward.stack()
         all_total_reward = all_total_reward.stack()
         all_dones = all_dones.stack()
         all_garbage_pushed = all_garbage_pushed.stack()
         all_wins = all_wins.stack()
+        all_losses = all_losses.stack()
         all_opp_boards = all_opp_boards.stack()
         all_opp_pieces = all_opp_pieces.stack()
         all_opp_b2b_combo_garbage = all_opp_b2b_combo_garbage.stack()
@@ -304,12 +318,14 @@ class Py1v1TetrisRunner:
             all_values,
             all_last_values,
             all_attacks,
+            all_net_attacks,
             all_clears,
             all_attack_reward,
             all_total_reward,
             all_dones,
             all_garbage_pushed,
             all_wins,
+            all_losses,
             # Opponent state for value model training
             all_opp_boards,
             all_opp_pieces,
