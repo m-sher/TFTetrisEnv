@@ -243,7 +243,9 @@ class PyTetris1v1Env(py_environment.PyEnvironment):
             p2_died = True
 
         # --- Reward for player 1 ---
-        attack_reward = self._env1._attack_reward * attack1
+        b2b_level = max(0, self._env1._scorer._b2b)
+        b2b_mult = 1.0 + 0.5 * b2b_level + 2.0 * max(0, b2b_level - 3)
+        attack_reward = self._env1._attack_reward * net1 * b2b_mult
 
         if self._use_shaping:
             b2b_val = self._env1._scorer._b2b
