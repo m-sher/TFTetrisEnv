@@ -12,6 +12,12 @@ hole_finder_module = Extension(
     extra_compile_args=["-O3", "-std=c99"],
 )
 
+b2b_search_module = Extension(
+    "TetrisEnv.b2b_search",
+    sources=["TetrisEnv/b2b_search.c"],
+    extra_compile_args=["-O3", "-std=c99", "-lm"],
+)
+
 setup(
     name="TetrisEnv",
     version="0.8.0",
@@ -20,7 +26,7 @@ setup(
     author_email="michael.a.sherrick@gmail.com",
     url="https://github.com/m-sher/TFTetrisEnv",
     packages=find_packages(),
-    ext_modules=[pathfinder_module, hole_finder_module],
+    ext_modules=[pathfinder_module, hole_finder_module, b2b_search_module],
     install_requires=[
         "tensorflow",
         "tf-agents",
