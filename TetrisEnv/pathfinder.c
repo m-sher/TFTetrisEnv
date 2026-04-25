@@ -506,11 +506,13 @@ void find_sequences_c(
         decode_state(curr_state, &r, &c, &rot, piece_type);
         int depth = meta[curr_state].depth;
         
+        // Only emit a placement when this BFS state IS the landing state.
+        // (See b2b_search.c for full rationale — same fix.)
         int land_r = hard_drop_row(board_rows, board_height, piece_type, rot, r, c);
-        
-        if (land_r >= visible_start && land_r < visible_start + VISIBLE_ROWS) {
+
+        if (r == land_r && land_r >= visible_start && land_r < visible_start + VISIBLE_ROWS) {
             bool is_spin = false;
-            
+
             if (meta[curr_state].delta_r != 0) {
                  if (piece_type == PIECE_T) {
                      int delta_sum = abs(meta[curr_state].delta_row) + abs(meta[curr_state].delta_col);

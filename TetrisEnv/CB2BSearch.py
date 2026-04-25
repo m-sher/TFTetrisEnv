@@ -105,13 +105,14 @@ class CB2BSearch:
             np.uint16(1) << np.arange(10, dtype=np.uint16)
         ).astype(np.uint16)
 
-        self.NUM_DECOMPOSE = 14
+        self.NUM_DECOMPOSE = 21
         self.COMPONENT_NAMES = [
-            "height", "bumpiness",
-            "holes", "wasted_holes", "hole_forgive", "well",
-            "b2b_flat", "b2b_log", "combo", "b2b_break",
+            "height", "near_death", "bumpiness",
+            "holes", "wasted_holes", "hole_ceiling", "hole_forgive", "well",
+            "b2b_flat", "b2b_sqrt", "combo", "downstack",
             "tslot", "immobile_clear",
-            "spike", "attack",
+            "max_single", "attack",
+            "cascade", "surge_pot", "app", "break_ready", "b2b_linear",
         ]
 
     def search(
@@ -125,8 +126,8 @@ class CB2BSearch:
         total_garbage: int,
         garbage_push_delay: int = 1,
         bag_seen: int = 0,
-        search_depth: int = 6,
-        beam_width: int = 96,
+        search_depth: int = 7,
+        beam_width: int = 128,
         max_len: int = 15,
     ) -> Tuple[int, np.ndarray]:
         if not self._lib:
@@ -217,8 +218,8 @@ class CB2BSearch:
         self,
         configs: List[GameConfig],
         num_steps: int = 64,
-        search_depth: int = 6,
-        beam_width: int = 96,
+        search_depth: int = 7,
+        beam_width: int = 128,
         queue_size: int = 5,
     ) -> List[GameResult]:
         """Run multiple evaluation games entirely in C.

@@ -13,14 +13,12 @@ import pygame
 import numpy as np
 import copy
 import sys
-import json
 import argparse
 
 from TetrisEnv.PyTetrisEnv import PyTetrisEnv
 from TetrisEnv.CB2BSearch import CB2BSearch
 from TetrisEnv.Pieces import PieceType
 from TetrisEnv.RotationSystem import RotationSystem
-from b2b_test import set_weights
 
 # ── Tetris piece colors (guideline) ─────────────────────────
 PIECE_COLORS = {
@@ -397,12 +395,10 @@ def run_headless(args):
 # ── Main ─────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="B2B Search GUI Demo")
-    ap.add_argument('--weights', type=str, default=None,
-                    help='Path to weights JSON (e.g. runs/b2b_opt_*/best_weights.json)')
     ap.add_argument('--headless', action='store_true',
                     help='Run without GUI, print per-turn stats to terminal')
-    ap.add_argument('--search-depth', type=int, default=4)
-    ap.add_argument('--beam-width', type=int, default=64)
+    ap.add_argument('--search-depth', type=int, default=7)
+    ap.add_argument('--beam-width', type=int, default=128)
     ap.add_argument('--num-steps', type=int, default=200,
                     help='Max turns to play (headless mode)')
     ap.add_argument('--queue-size', type=int, default=5)
@@ -412,16 +408,6 @@ def main():
     ap.add_argument('--garbage-delay', type=int, default=1)
     ap.add_argument('--seed', type=int, default=42)
     args = ap.parse_args()
-
-    # Load weights (from JSON file, or use defaults)
-    if args.weights:
-        with open(args.weights) as f:
-            w = json.load(f)
-        set_weights(**w)
-        print(f"Loaded weights from {args.weights}")
-    else:
-        set_weights()  # apply b2b_test.py DEFAULTS
-        print("Using default weights")
 
     if args.headless:
         run_headless(args)
