@@ -649,7 +649,7 @@ static int find_placements(const uint16_t* board_rows, int board_height,
         // Check landing from this position
         int land_r = b2b_hard_drop_row(board_rows, board_height, piece_type, rot, r, c);
 
-        if (land_r >= visible_start && num_placements < max_out) {
+        if (r == land_r && land_r >= visible_start && num_placements < max_out) {
             int spin = SPIN_NONE;
             int delta_r_val = meta[curr_state].delta_r;
             int dloc_sum = abs(meta[curr_state].delta_row) + abs(meta[curr_state].delta_col);
