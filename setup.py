@@ -15,7 +15,8 @@ hole_finder_module = Extension(
 b2b_search_module = Extension(
     "TetrisEnv.b2b_search",
     sources=["TetrisEnv/b2b_search.c"],
-    extra_compile_args=["-O3", "-std=c99", "-lm"],
+    extra_compile_args=["-O3", "-std=c99", "-fopenmp", "-lm"],
+    extra_link_args=["-fopenmp"],
 )
 
 setup(

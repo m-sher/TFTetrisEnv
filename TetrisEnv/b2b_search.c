@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <omp.h>
 
 
 // ============================================================
@@ -395,7 +396,7 @@ static bool b2b_initialized = false;
 
 // Last search result — read by the C game loop to avoid lossy action_idx decode.
 // b2b_search_c() writes this; b2b_run_eval_games() reads it.
-static Placement b2b_last_placement;
+static __thread Placement b2b_last_placement;
 
 // Kick tables: [from_rot][to_rot][kick_index][0=row, 1=col]
 static int8_t B2B_KICKS[4][4][5][2];
@@ -949,9 +950,9 @@ static int find_placements(const uint16_t* board_rows, int board_height,
                            int piece_type, Placement* out, int max_out,
                            BFSStateMeta* meta_out) {
     // meta_out may be NULL if we don't need sequence reconstruction (depth > 0)
-    static BFSStateMeta meta[BFS_STATE_SPACE];
-    static bool visited[BFS_STATE_SPACE];
-    static int queue[BFS_QUEUE_CAPACITY];
+    static __thread BFSStateMeta meta[BFS_STATE_SPACE];
+    static __thread bool visited[BFS_STATE_SPACE];
+    static __thread int queue[BFS_QUEUE_CAPACITY];
 
     for (int i = 0; i < BFS_STATE_SPACE; i++) {
         visited[i] = false;
@@ -1143,7 +1144,7 @@ static void compute_reachability(const uint16_t* board, int board_height,
                                   uint16_t* reachable) {
     memset(reachable, 0, sizeof(uint16_t) * board_height);
 
-    static int flood_queue[BOARD_ROWS * BOARD_COLS * 2]; // row, col pairs
+    int flood_queue[BOARD_ROWS * BOARD_COLS * 2]; // row, col pairs
     int fh = 0, ft = 0;
 
     for (int c = 0; c < BOARD_COLS; c++) {
@@ -2288,9 +2289,9 @@ static float cheap_prescore(const SearchState* state, int board_height) {
 // Used during beam expansion to maintain a rolling lower bound so that
 // children whose cheap_prescore + ASPIRATION_SLACK < current K-th best
 // full score can be skipped entirely.
-static float g_topk_heap[MAX_BEAM_WIDTH];
-static int   g_topk_size = 0;
-static int   g_topk_cap  = 0;
+static __thread float g_topk_heap[MAX_BEAM_WIDTH];
+static __thread int   g_topk_size = 0;
+static __thread int   g_topk_cap  = 0;
 
 static const float ASPIRATION_SLACK = 15.0f;
 
@@ -2959,6 +2960,98 @@ static void b2b_write_sequence(const BFSStateMeta* meta, int bfs_state,
 }
 
 // ============================================================
+// Parallel beam child expansion helper (depths 1+)
+// ============================================================
+
+// Thread-safe child expansion: builds a child state from a parent + placement,
+// evaluates it, and atomically inserts into next_beam if it passes all filters.
+static inline void expand_and_insert(
+    SearchState* next_beam, int* next_beam_size_ptr, int max_next,
+    const SearchState* parent,
+    int board_height,
+    int piece_type, const Placement* pl,
+    int new_hold_piece,
+    int new_queue_idx,
+    uint8_t new_bag_seen,
+    const int* queue, int queue_len
+) {
+    SearchState child;
+    memcpy(child.board, parent->board, sizeof(uint16_t) * board_height);
+    lock_piece_on_board(child.board, board_height, piece_type, pl->rot, pl->landing_row, pl->col);
+    int clears = clear_lines(child.board, board_height);
+
+    bool perfect_clear = true;
+    for (int r = 0; r < board_height; r++) {
+        if (child.board[r] != 0) { perfect_clear = false; break; }
+    }
+
+    AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
+
+    child.b2b = ar.new_b2b;
+    child.combo = ar.new_combo;
+    child.total_attack = parent->total_attack + ar.attack;
+    child.max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
+    {
+        float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
+        child.b2b_attack = parent->b2b_attack + ba;
+        child.max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack;
+    }
+    child.total_lines_cleared = parent->total_lines_cleared + clears;
+    child.pieces_placed = parent->pieces_placed + 1;
+    child.hold_piece = new_hold_piece;
+    child.next_queue_idx = new_queue_idx;
+    child.depth0_placement_idx = parent->depth0_placement_idx;
+    child.b2b_broken = parent->b2b_broken || ar.b2b_broken;
+    child.prev_b2b = parent->b2b_broken ? parent->prev_b2b
+                   : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
+    child.bag_seen = new_bag_seen;
+
+    bool pushed_garbage = false;
+    {
+        int gr = parent->garbage_remaining;
+        int gt = parent->garbage_timer;
+        if (ar.attack > 0 && gr > 0) {
+            int cancel = (int)ar.attack;
+            gr = (gr > cancel) ? gr - cancel : 0;
+        }
+        if (clears == 0 && gr > 0) {
+            if (gt <= 0) {
+                push_simulated_garbage(child.board, board_height, gr);
+                gr = 0;
+                pushed_garbage = true;
+            } else {
+                gt--;
+            }
+        }
+        child.garbage_remaining = gr;
+        child.garbage_timer = gt;
+    }
+
+    if (clears == 0 && !pushed_garbage) {
+        patch_col_heights_after_place(parent->col_heights, piece_type, pl->rot,
+                                      pl->landing_row, pl->col, board_height,
+                                      child.col_heights);
+    } else {
+        compute_col_heights_full(child.board, board_height, child.col_heights);
+    }
+
+    if (placement_is_dead(&child, board_height)) return;
+
+    {
+        float _cheap = cheap_prescore(&child, board_height);
+        float _floor = topk_floor();
+        if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) return;
+        child.score = evaluate_state(&child, board_height, queue, queue_len);
+        topk_insert(child.score);
+    }
+
+    int slot = __atomic_fetch_add(next_beam_size_ptr, 1, __ATOMIC_RELAXED);
+    if (slot < max_next) {
+        next_beam[slot] = child;
+    }
+}
+
+// ============================================================
 // Beam Search Entry Point
 // ============================================================
 
@@ -3018,10 +3111,10 @@ void b2b_search_c(
     }
 
     // Store depth-0 BFS meta and placement info for sequence reconstruction
-    static BFSStateMeta depth0_meta_active[BFS_STATE_SPACE];
-    static BFSStateMeta depth0_meta_hold[BFS_STATE_SPACE];
-    static Placement depth0_placements[MAX_PLACEMENTS * 2];
-    static int depth0_is_hold[MAX_PLACEMENTS * 2];
+    static __thread BFSStateMeta depth0_meta_active[BFS_STATE_SPACE];
+    static __thread BFSStateMeta depth0_meta_hold[BFS_STATE_SPACE];
+    static __thread Placement depth0_placements[MAX_PLACEMENTS * 2];
+    static __thread int depth0_is_hold[MAX_PLACEMENTS * 2];
     int depth0_count = 0;
 
     // Initial garbage timer: the caller tells us the push delay.  A value
@@ -3276,427 +3369,89 @@ void b2b_search_c(
         next_beam_size = 0;
     }
 
-    // ---- Depths 1..search_depth-1 ----
+    // ---- Depths 1..search_depth-1 (OpenMP parallel beam expansion) ----
     for (int depth = 1; depth < search_depth; depth++) {
-        next_beam_size = 0;
-        topk_reset(beam_width);
+        int next_count = 0;
 
-        for (int bi = 0; bi < curr_beam_size; bi++) {
-            SearchState* parent = &curr_beam[bi];
+        #pragma omp parallel
+        {
+            Placement local_pl[MAX_PLACEMENTS];
+            topk_reset(beam_width);
 
-            int qi = parent->next_queue_idx;
-            if (qi >= queue_len) {
-                // ---- Speculative: branch on remaining bag pieces ----
-                int remaining[7];
-                int n_remaining = bag_get_remaining(parent->bag_seen, remaining);
+            #pragma omp for schedule(dynamic)
+            for (int bi = 0; bi < curr_beam_size; bi++) {
+                SearchState* parent = &curr_beam[bi];
+                int qi = parent->next_queue_idx;
+                int np_local;
 
-                if (n_remaining == 0) {
-                    // All pieces consumed — shouldn't happen, keep as leaf
-                    if (next_beam_size < max_next) {
-                        next_beam[next_beam_size] = *parent;
-                        next_beam_size++;
+                if (qi >= queue_len) {
+                    // ---- Speculative: branch on remaining bag pieces ----
+                    int remaining[7];
+                    int n_remaining = bag_get_remaining(parent->bag_seen, remaining);
+
+                    if (n_remaining == 0) {
+                        int slot = __atomic_fetch_add(&next_count, 1, __ATOMIC_RELAXED);
+                        if (slot < max_next) next_beam[slot] = *parent;
+                        continue;
+                    }
+
+                    for (int pi = 0; pi < n_remaining; pi++) {
+                        int spec_piece = remaining[pi];
+                        uint8_t new_bag = bag_consume_piece(parent->bag_seen, spec_piece);
+
+                        np_local = find_placements(parent->board, board_height, spec_piece,
+                                                   local_pl, MAX_PLACEMENTS, NULL);
+                        for (int i = 0; i < np_local; i++)
+                            expand_and_insert(next_beam, &next_count, max_next,
+                                parent, board_height, spec_piece, &local_pl[i],
+                                parent->hold_piece, qi + 1, new_bag, queue, queue_len);
+
+                        if (parent->hold_piece != PIECE_N) {
+                            int held = parent->hold_piece;
+                            np_local = find_placements(parent->board, board_height, held,
+                                                       local_pl, MAX_PLACEMENTS, NULL);
+                            for (int i = 0; i < np_local; i++)
+                                expand_and_insert(next_beam, &next_count, max_next,
+                                    parent, board_height, held, &local_pl[i],
+                                    spec_piece, qi + 1, new_bag, queue, queue_len);
+                        }
                     }
                     continue;
                 }
 
-                for (int pi = 0; pi < n_remaining; pi++) {
-                    int spec_piece = remaining[pi];
-                    uint8_t new_bag = bag_consume_piece(parent->bag_seen, spec_piece);
+                int piece = queue[qi];
 
-                    // Try placing speculative piece directly
-                    np = find_placements(parent->board, board_height, spec_piece, placements, MAX_PLACEMENTS, NULL);
+                // Place current piece (no hold)
+                np_local = find_placements(parent->board, board_height, piece,
+                                           local_pl, MAX_PLACEMENTS, NULL);
+                for (int i = 0; i < np_local; i++)
+                    expand_and_insert(next_beam, &next_count, max_next,
+                        parent, board_height, piece, &local_pl[i],
+                        parent->hold_piece, qi + 1, parent->bag_seen, queue, queue_len);
 
-                    for (int i = 0; i < np && next_beam_size < max_next; i++) {
-                        Placement* pl = &placements[i];
-                        SearchState* s = &next_beam[next_beam_size];
-
-                        memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
-                        lock_piece_on_board(s->board, board_height, spec_piece, pl->rot, pl->landing_row, pl->col);
-                        int clears = clear_lines(s->board, board_height);
-
-                        bool perfect_clear = true;
-                        for (int r = 0; r < board_height; r++) {
-                            if (s->board[r] != 0) { perfect_clear = false; break; }
-                        }
-
-                        AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
-
-                        s->b2b = ar.new_b2b;
-                        s->combo = ar.new_combo;
-                        s->total_attack = parent->total_attack + ar.attack;
-                        s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
-                        { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
-                          s->b2b_attack = parent->b2b_attack + ba;
-                          s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
-                        s->total_lines_cleared = parent->total_lines_cleared + clears;
-                        s->pieces_placed = parent->pieces_placed + 1;
-                        s->hold_piece = parent->hold_piece;
-                        s->next_queue_idx = qi + 1;
-                        s->depth0_placement_idx = parent->depth0_placement_idx;
-                        s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
-                        s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                        s->bag_seen = new_bag;
-
-                        bool pushed_garbage = false;
-                        {
-                            int gr = parent->garbage_remaining;
-                            int gt = parent->garbage_timer;
-                            if (ar.attack > 0 && gr > 0) {
-                                int cancel = (int)ar.attack;
-                                gr = (gr > cancel) ? gr - cancel : 0;
-                            }
-                            if (clears == 0 && gr > 0) {
-                                if (gt <= 0) {
-                                    push_simulated_garbage(s->board, board_height, gr);
-                                    gr = 0;
-                                    pushed_garbage = true;
-                                } else {
-                                    gt--;
-                                }
-                            }
-                            s->garbage_remaining = gr;
-                            s->garbage_timer = gt;
-                        }
-
-                        if (clears == 0 && !pushed_garbage) {
-                            patch_col_heights_after_place(parent->col_heights, spec_piece, pl->rot,
-                                                          pl->landing_row, pl->col, board_height,
-                                                          s->col_heights);
-                        } else {
-                            compute_col_heights_full(s->board, board_height, s->col_heights);
-                        }
-
-                        if (placement_is_dead(s, board_height)) { continue; }
-                        {
-                            float _cheap = cheap_prescore(s, board_height);
-                            float _floor = topk_floor();
-                            if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) { continue; }
-                            s->score = evaluate_state(s, board_height, queue, queue_len);
-                            topk_insert(s->score);
-                        }
-
-                        next_beam_size++;
-                    }
-
-                    // Try hold swap (if hold piece exists)
-                    if (parent->hold_piece != PIECE_N) {
-                        int held = parent->hold_piece;
-                        np = find_placements(parent->board, board_height, held, placements, MAX_PLACEMENTS, NULL);
-
-                        for (int i = 0; i < np && next_beam_size < max_next; i++) {
-                            Placement* pl = &placements[i];
-                            SearchState* s = &next_beam[next_beam_size];
-
-                            memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
-                            lock_piece_on_board(s->board, board_height, held, pl->rot, pl->landing_row, pl->col);
-                            int clears = clear_lines(s->board, board_height);
-
-                            bool perfect_clear = true;
-                            for (int r = 0; r < board_height; r++) {
-                                if (s->board[r] != 0) { perfect_clear = false; break; }
-                            }
-
-                            AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
-
-                            s->b2b = ar.new_b2b;
-                            s->combo = ar.new_combo;
-                            s->total_attack = parent->total_attack + ar.attack;
-                            s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
-                            { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
-                              s->b2b_attack = parent->b2b_attack + ba;
-                              s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
-                            s->total_lines_cleared = parent->total_lines_cleared + clears;
-                            s->pieces_placed = parent->pieces_placed + 1;
-                            s->hold_piece = spec_piece; // speculative piece goes to hold
-                            s->next_queue_idx = qi + 1;
-                            s->depth0_placement_idx = parent->depth0_placement_idx;
-                            s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
-                            s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                            s->bag_seen = new_bag;
-
-                            bool pushed_garbage = false;
-                            {
-                                int gr = parent->garbage_remaining;
-                                int gt = parent->garbage_timer;
-                                if (ar.attack > 0 && gr > 0) {
-                                    int cancel = (int)ar.attack;
-                                    gr = (gr > cancel) ? gr - cancel : 0;
-                                }
-                                if (clears == 0 && gr > 0) {
-                                    if (gt <= 0) {
-                                        push_simulated_garbage(s->board, board_height, gr);
-                                        gr = 0;
-                                        pushed_garbage = true;
-                                    } else {
-                                        gt--;
-                                    }
-                                }
-                                s->garbage_remaining = gr;
-                                s->garbage_timer = gt;
-                            }
-
-                            if (clears == 0 && !pushed_garbage) {
-                                patch_col_heights_after_place(parent->col_heights, held, pl->rot,
-                                                              pl->landing_row, pl->col, board_height,
-                                                              s->col_heights);
-                            } else {
-                                compute_col_heights_full(s->board, board_height, s->col_heights);
-                            }
-
-                            if (placement_is_dead(s, board_height)) { continue; }
-                            {
-                                float _cheap = cheap_prescore(s, board_height);
-                                float _floor = topk_floor();
-                                if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) { continue; }
-                                s->score = evaluate_state(s, board_height, queue, queue_len);
-                                topk_insert(s->score);
-                            }
-
-                            next_beam_size++;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            int piece = queue[qi];
-
-            // Try placing active piece (no hold)
-            np = find_placements(parent->board, board_height, piece, placements, MAX_PLACEMENTS, NULL);
-
-            for (int i = 0; i < np && next_beam_size < max_next; i++) {
-                Placement* pl = &placements[i];
-                SearchState* s = &next_beam[next_beam_size];
-
-                memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
-                lock_piece_on_board(s->board, board_height, piece, pl->rot, pl->landing_row, pl->col);
-                int clears = clear_lines(s->board, board_height);
-
-                bool perfect_clear = true;
-                for (int r = 0; r < board_height; r++) {
-                    if (s->board[r] != 0) { perfect_clear = false; break; }
-                }
-
-                AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
-
-                s->b2b = ar.new_b2b;
-                s->combo = ar.new_combo;
-                s->total_attack = parent->total_attack + ar.attack;
-                s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
-                { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
-                  s->b2b_attack = parent->b2b_attack + ba;
-                  s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
-                s->total_lines_cleared = parent->total_lines_cleared + clears;
-                s->pieces_placed = parent->pieces_placed + 1;
-                s->hold_piece = parent->hold_piece;
-                s->next_queue_idx = qi + 1;
-                s->depth0_placement_idx = parent->depth0_placement_idx;
-                s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
-                s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                s->bag_seen = parent->bag_seen;
-
-                bool pushed_garbage = false;
-                {
-                    int gr = parent->garbage_remaining;
-                    int gt = parent->garbage_timer;
-                    if (ar.attack > 0 && gr > 0) {
-                        int cancel = (int)ar.attack;
-                        gr = (gr > cancel) ? gr - cancel : 0;
-                    }
-                    if (clears == 0 && gr > 0) {
-                        if (gt <= 0) {
-                            push_simulated_garbage(s->board, board_height, gr);
-                            gr = 0;
-                            pushed_garbage = true;
-                        } else {
-                            gt--;
-                        }
-                    }
-                    s->garbage_remaining = gr;
-                    s->garbage_timer = gt;
-                }
-
-                if (clears == 0 && !pushed_garbage) {
-                    patch_col_heights_after_place(parent->col_heights, piece, pl->rot,
-                                                  pl->landing_row, pl->col, board_height,
-                                                  s->col_heights);
-                } else {
-                    compute_col_heights_full(s->board, board_height, s->col_heights);
-                }
-
-                if (placement_is_dead(s, board_height)) { continue; }
-                {
-                    float _cheap = cheap_prescore(s, board_height);
-                    float _floor = topk_floor();
-                    if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) { continue; }
-                    s->score = evaluate_state(s, board_height, queue, queue_len);
-                    topk_insert(s->score);
-                }
-
-                next_beam_size++;
-            }
-
-            // Try hold swap
-            if (parent->hold_piece != PIECE_N) {
-                int held = parent->hold_piece;
-                np = find_placements(parent->board, board_height, held, placements, MAX_PLACEMENTS, NULL);
-
-                for (int i = 0; i < np && next_beam_size < max_next; i++) {
-                    Placement* pl = &placements[i];
-                    SearchState* s = &next_beam[next_beam_size];
-
-                    memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
-                    lock_piece_on_board(s->board, board_height, held, pl->rot, pl->landing_row, pl->col);
-                    int clears = clear_lines(s->board, board_height);
-
-                    bool perfect_clear = true;
-                    for (int r = 0; r < board_height; r++) {
-                        if (s->board[r] != 0) { perfect_clear = false; break; }
-                    }
-
-                    AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
-
-                    s->b2b = ar.new_b2b;
-                    s->combo = ar.new_combo;
-                    s->total_attack = parent->total_attack + ar.attack;
-                    s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
-                    { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
-                      s->b2b_attack = parent->b2b_attack + ba;
-                      s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
-                    s->total_lines_cleared = parent->total_lines_cleared + clears;
-                    s->pieces_placed = parent->pieces_placed + 1;
-                    s->hold_piece = piece;
-                    s->next_queue_idx = qi + 1;
-                    s->depth0_placement_idx = parent->depth0_placement_idx;
-                    s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
-                    s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->bag_seen = parent->bag_seen;
-
-                    bool pushed_garbage = false;
-                    {
-                        int gr = parent->garbage_remaining;
-                        int gt = parent->garbage_timer;
-                        if (ar.attack > 0 && gr > 0) {
-                            int cancel = (int)ar.attack;
-                            gr = (gr > cancel) ? gr - cancel : 0;
-                        }
-                        if (clears == 0 && gr > 0) {
-                            if (gt <= 0) {
-                                push_simulated_garbage(s->board, board_height, gr);
-                                gr = 0;
-                                pushed_garbage = true;
-                            } else {
-                                gt--;
-                            }
-                        }
-                        s->garbage_remaining = gr;
-                        s->garbage_timer = gt;
-                    }
-
-                    if (clears == 0 && !pushed_garbage) {
-                        patch_col_heights_after_place(parent->col_heights, held, pl->rot,
-                                                      pl->landing_row, pl->col, board_height,
-                                                      s->col_heights);
-                    } else {
-                        compute_col_heights_full(s->board, board_height, s->col_heights);
-                    }
-
-                    if (placement_is_dead(s, board_height)) { continue; }
-                    {
-                        float _cheap = cheap_prescore(s, board_height);
-                        float _floor = topk_floor();
-                        if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) { continue; }
-                        s->score = evaluate_state(s, board_height, queue, queue_len);
-                        topk_insert(s->score);
-                    }
-
-                    next_beam_size++;
-                }
-            } else if (qi + 1 < queue_len) {
-                // No hold piece — holding puts active into hold, play next from queue
-                int next_piece = piece; // Goes to hold
-                int play_piece_idx = qi + 1;
-                int play_piece = queue[play_piece_idx];
-
-                np = find_placements(parent->board, board_height, play_piece, placements, MAX_PLACEMENTS, NULL);
-
-                for (int i = 0; i < np && next_beam_size < max_next; i++) {
-                    Placement* pl = &placements[i];
-                    SearchState* s = &next_beam[next_beam_size];
-
-                    memcpy(s->board, parent->board, sizeof(uint16_t) * board_height);
-                    lock_piece_on_board(s->board, board_height, play_piece, pl->rot, pl->landing_row, pl->col);
-                    int clears = clear_lines(s->board, board_height);
-
-                    bool perfect_clear = true;
-                    for (int r = 0; r < board_height; r++) {
-                        if (s->board[r] != 0) { perfect_clear = false; break; }
-                    }
-
-                    AttackResult ar = compute_attack(clears, pl->spin_type, parent->b2b, parent->combo, perfect_clear);
-
-                    s->b2b = ar.new_b2b;
-                    s->combo = ar.new_combo;
-                    s->total_attack = parent->total_attack + ar.attack;
-                    s->max_single_attack = ar.attack > parent->max_single_attack ? ar.attack : parent->max_single_attack;
-                    { float ba = ar.b2b_maintaining ? ar.attack : 0.0f;
-                      s->b2b_attack = parent->b2b_attack + ba;
-                      s->max_b2b_attack = ba > parent->max_b2b_attack ? ba : parent->max_b2b_attack; }
-                    s->total_lines_cleared = parent->total_lines_cleared + clears;
-                    s->pieces_placed = parent->pieces_placed + 1;
-                    s->hold_piece = next_piece;
-                    s->next_queue_idx = play_piece_idx + 1;
-                    s->depth0_placement_idx = parent->depth0_placement_idx;
-                    s->b2b_broken = parent->b2b_broken || ar.b2b_broken;
-                    s->prev_b2b = parent->b2b_broken ? parent->prev_b2b : (ar.b2b_broken ? parent->b2b : parent->prev_b2b);
-                    s->bag_seen = parent->bag_seen;
-
-                    bool pushed_garbage = false;
-                    {
-                        int gr = parent->garbage_remaining;
-                        int gt = parent->garbage_timer;
-                        if (ar.attack > 0 && gr > 0) {
-                            int cancel = (int)ar.attack;
-                            gr = (gr > cancel) ? gr - cancel : 0;
-                        }
-                        if (clears == 0 && gr > 0) {
-                            if (gt <= 0) {
-                                push_simulated_garbage(s->board, board_height, gr);
-                                gr = 0;
-                                pushed_garbage = true;
-                            } else {
-                                gt--;
-                            }
-                        }
-                        s->garbage_remaining = gr;
-                        s->garbage_timer = gt;
-                    }
-
-                    if (clears == 0 && !pushed_garbage) {
-                        patch_col_heights_after_place(parent->col_heights, play_piece, pl->rot,
-                                                      pl->landing_row, pl->col, board_height,
-                                                      s->col_heights);
-                    } else {
-                        compute_col_heights_full(s->board, board_height, s->col_heights);
-                    }
-
-                    if (placement_is_dead(s, board_height)) { continue; }
-                    {
-                        float _cheap = cheap_prescore(s, board_height);
-                        float _floor = topk_floor();
-                        if (_floor > -1e8f && _cheap + ASPIRATION_SLACK < _floor) { continue; }
-                        s->score = evaluate_state(s, board_height, queue, queue_len);
-                        topk_insert(s->score);
-                    }
-
-                    next_beam_size++;
+                // Hold swap
+                if (parent->hold_piece != PIECE_N) {
+                    int held = parent->hold_piece;
+                    np_local = find_placements(parent->board, board_height, held,
+                                               local_pl, MAX_PLACEMENTS, NULL);
+                    for (int i = 0; i < np_local; i++)
+                        expand_and_insert(next_beam, &next_count, max_next,
+                            parent, board_height, held, &local_pl[i],
+                            piece, qi + 1, parent->bag_seen, queue, queue_len);
+                } else if (qi + 1 < queue_len) {
+                    int play_piece = queue[qi + 1];
+                    np_local = find_placements(parent->board, board_height, play_piece,
+                                               local_pl, MAX_PLACEMENTS, NULL);
+                    for (int i = 0; i < np_local; i++)
+                        expand_and_insert(next_beam, &next_count, max_next,
+                            parent, board_height, play_piece, &local_pl[i],
+                            piece, qi + 2, parent->bag_seen, queue, queue_len);
                 }
             }
         }
 
-        // Dedupe, then top-K select.  At depth>=1 dedupe is especially
-        // high-value: many (parent, placement) pairs collapse onto the same
-        // post-state, which would otherwise multiply through expansion.
+        next_beam_size = (next_count < max_next) ? next_count : max_next;
+
         next_beam_size = dedupe_beam(next_beam, next_beam_size, board_height,
                                      hash_table, hash_cap);
         next_beam_size = beam_select_top_k(next_beam, next_beam_size, beam_width);
