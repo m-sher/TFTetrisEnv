@@ -101,11 +101,27 @@ class CB2BSearch:
             ]
             self._lib.b2b_run_eval_games.restype = None
 
+            # --- weight override / introspection ---
+            self._lib.b2b_set_weight.argtypes = [ctypes.c_char_p, ctypes.c_float]
+            self._lib.b2b_set_weight.restype = ctypes.c_int
+
+            self._lib.b2b_get_weight.argtypes = [ctypes.c_char_p]
+            self._lib.b2b_get_weight.restype = ctypes.c_float
+
+            self._lib.b2b_reset_weights.argtypes = []
+            self._lib.b2b_reset_weights.restype = None
+
+            self._lib.b2b_get_weight_count.argtypes = []
+            self._lib.b2b_get_weight_count.restype = ctypes.c_int
+
+            self._lib.b2b_get_weight_name.argtypes = [ctypes.c_int]
+            self._lib.b2b_get_weight_name.restype = ctypes.c_char_p
+
         self._col_bits = (
             np.uint16(1) << np.arange(10, dtype=np.uint16)
         ).astype(np.uint16)
 
-        self.NUM_DECOMPOSE = 21
+        self.NUM_DECOMPOSE = 22
         self.COMPONENT_NAMES = [
             "height", "near_death", "bumpiness",
             "holes", "wasted_holes", "hole_ceiling", "hole_forgive", "well",
@@ -113,6 +129,7 @@ class CB2BSearch:
             "tslot", "immobile_clear",
             "max_single", "attack",
             "cascade", "surge_pot", "app", "break_ready", "b2b_linear",
+            "garbage_prevent",
         ]
 
     def search(
@@ -247,3 +264,28 @@ class CB2BSearch:
         )
 
         return list(results)
+
+    def set_weight(self, name: str, value: float) -> bool:
+        if not self._lib:
+            raise RuntimeError("b2b_search C library not loaded")
+        return bool(self._lib.b2b_set_weight(name.encode("ascii"), float(value)))
+
+    def get_weight(self, name: str) -> float:
+        if not self._lib:
+            raise RuntimeError("b2b_search C library not loaded")
+        return float(self._lib.b2b_get_weight(name.encode("ascii")))
+
+    def reset_weights(self) -> None:
+        if not self._lib:
+            raise RuntimeError("b2b_search C library not loaded")
+        self._lib.b2b_reset_weights()
+
+    def weight_names(self) -> List[str]:
+        if not self._lib:
+            raise RuntimeError("b2b_search C library not loaded")
+        n = self._lib.b2b_get_weight_count()
+        out = []
+        for i in range(n):
+            raw = self._lib.b2b_get_weight_name(i)
+            out.append(raw.decode("ascii") if raw else "")
+        return out
