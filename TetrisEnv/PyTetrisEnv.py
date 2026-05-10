@@ -33,18 +33,18 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         gamma: float = 0.99,
         auto_push_garbage: bool = True,
         auto_fill_queue: bool = True,
-        num_row_tiers: int = 1,
+        num_row_tiers: int = 2,
         use_shaping: bool = True,
     ) -> None:
         self._attack_reward = 1.0
         self._b2b_coef = 2.0
-        self._surge_coef = 1.0
+        self._surge_coef = 0.0
         self._combo_coef = 0.5
         self._safety_coef = 10.0
         self._hole_coef = 1.0
         self._skyline_coef = 0.1
         self._bumpy_coef = 0.2
-        self._death_penalty = -100.0
+        self._death_penalty = -50.0
 
         self._max_holes = max_holes
         self._max_height = max_height
@@ -162,7 +162,7 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         # Main goal (is to blow up and act like I don't know nobody ackackackackack)
         phi_target = (
             (self._b2b_coef * np.log(1 + b2b_level)) +
-            (self._surge_coef * 1.15 ** surge_lines - 1) +
+            (self._surge_coef * (1.15 ** surge_lines - 1)) +
             (self._combo_coef * np.log(1 + combo_level))
         )
 
