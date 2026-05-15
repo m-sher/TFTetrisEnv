@@ -35,6 +35,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         auto_fill_queue: bool = True,
         num_row_tiers: int = 2,
         use_shaping: bool = True,
+        b2b_extend_flat: float = 1.5,
+        b2b_extend_scale: float = 1.0,
     ) -> None:
         self._attack_reward = 1.0
         self._b2b_coef = 2.0
@@ -45,6 +47,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         self._skyline_coef = 0.1
         self._bumpy_coef = 0.2
         self._death_penalty = -50.0
+        self._b2b_extend_flat = b2b_extend_flat
+        self._b2b_extend_scale = b2b_extend_scale
 
         self._max_holes = max_holes
         self._max_height = max_height
@@ -218,6 +222,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
+        pre_b2b = self._scorer._b2b
+
         (
             top_out,
             clear,
@@ -271,6 +277,13 @@ class PyTetrisEnv(py_environment.PyEnvironment):
             current_phi = 0.0
             shaping_reward = 0.0
 
+        # Bonus for b2b-maintaining clears (spin/Tetris/PC). Fires only on
+        # extension events so it can't be farmed by stalling without clearing.
+        if b2b_val > pre_b2b:
+            extension_bonus = self._b2b_extend_flat + self._b2b_extend_scale * max(0, b2b_val)
+        else:
+            extension_bonus = 0.0
+
         exceeded_holes = (
             holes_val > self._max_holes if self._max_holes is not None else False
         )
@@ -279,8 +292,8 @@ class PyTetrisEnv(py_environment.PyEnvironment):
         garbage_top_out = np.any(board[: 24 - self._max_height] != 0.0)
 
         died = top_out or exceeded_holes or garbage_top_out
- 
-        total_reward = attack_reward + shaping_reward + (self._death_penalty if died else 0.0)
+
+        total_reward = attack_reward + shaping_reward + extension_bonus + (self._death_penalty if died else 0.0)
 
         if self._auto_fill_queue:
             queue = self._fill_queue(queue)
